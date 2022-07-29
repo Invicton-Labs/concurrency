@@ -2,6 +2,7 @@ package concurrency
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -11,6 +12,28 @@ var (
 	DefaultEmptyInputChannelCallbackInterval time.Duration = 1 * time.Second
 	DefaultFullOutputChannelCallbackInterval time.Duration = 1 * time.Second
 )
+
+type lastOutputTimeTracker struct {
+	lock sync.Mutex
+	t    *time.Time
+}
+
+func (lott *lastOutputTimeTracker) Get() *time.Time {
+	lott.lock.Lock()
+	defer lott.lock.Unlock()
+	if lott.t == nil {
+		t := time.Now()
+		lott.t = &t
+	}
+	return lott.t
+}
+
+func (lott *lastOutputTimeTracker) SetNow() {
+	lott.lock.Lock()
+	defer lott.lock.Unlock()
+	t := time.Now()
+	lott.t = &t
+}
 
 // The common set of values for callbacks that are specific to single routine
 type RoutineFunctionMetadata struct {
@@ -31,17 +54,10 @@ type RoutineFunctionMetadata struct {
 	//Log *zap.SugaredLogger
 }
 
-type ExecutorInput[InputType any, OutputType any] executorInput[InputType, OutputType, chan<- OutputType, func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output OutputType, err error)]
-
-type ExecutorUnbatchInput[InputType any, OutputType any] executorInput[InputType, OutputType, chan<- OutputType, func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output []OutputType, err error)]
-
-type ExecutorBatchInput[InputType any, OutputType any] executorInput[InputType, OutputType, chan<- []OutputType, func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output OutputType, err error)]
-
 type executorInput[
 	InputType any,
 	OutputType any,
-	OutputChanType chan<- OutputType | chan<- []OutputType,
-	FunctionType func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output OutputType, err error) | func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output []OutputType, err error),
+	OutputChanType any,
 ] struct {
 	// REQUIRED. A name that can be used in logs for this executor,
 	// and for finding it in callback inputs.
@@ -50,11 +66,11 @@ type executorInput[
 	// REQUIRED. The number of routines to run.
 	Concurrency int
 
-	// REQUIRED. The channel that has input values.
-	InputChannel <-chan InputType
-
 	// REQUIRED. The function that processes an input into an output.
-	Func FunctionType
+	Func func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output OutputType, err error)
+
+	// REQUIRED FOR TOP-LEVEL EXECUTORS (not for chained executors). The channel that has input values.
+	InputChannel <-chan InputType
 
 	// OPTIONAL. The size of the output channel that gets created.
 	// Defaults to the twice the Concurrency value. Only applies if
@@ -63,7 +79,7 @@ type executorInput[
 
 	// OPTIONAL. A channel to use for outputs, instead of creating a new
 	// one internally.
-	OutputChannel OutputChanType
+	OutputChannel chan OutputChanType
 
 	// OPTIONAL. Whether to ignore zero-value outputs from the processing function.
 	// If true, zero-value outputs (the default value of the output type) will not
@@ -122,31 +138,43 @@ type executorInput[
 	// and the context was cancelled.
 	ExecutorContextDoneCallback func(input *ExecutorContextDoneCallbackInput) error
 
-	// Internal use only. Passthrough values from upstream executors.
-	upstreamRoutineStatusTrackers []*RoutineStatusTracker
-	// Internal use only. The errgroup.Group that is used for the upstream process.
-	upstreamErrGroup *errgroup.Group
-	// Internal use only. If set to true, results returned from the function will be
-	// ignored and no output channel will be created.
-	disableOutputChan bool
-	// Internal use only. The context of the top-level executor.
-	internalExecutorCtx context.Context
-	// Internal use only. The cancellation function for the context of the top-level executor.
-	internalExecutorCtxCancel context.CancelFunc
+	// Internal use only. Output from the upstream executor.
+	upstream *ExecutorOutput[InputType]
 }
 
-type ExecutorOutput[OutputType any] struct {
+type upstreamCtxCancel struct {
+	upstream   *upstreamCtxCancel
+	cancelFunc context.CancelFunc
+}
+
+func (ucc *upstreamCtxCancel) cancel() {
+	// Cancel the context for this level
+	ucc.cancelFunc()
+	// Recurse up to the top
+	if ucc.upstream != nil {
+		ucc.upstream.cancel()
+	}
+}
+
+type ExecutorOutput[OutputChanType any] struct {
 
 	// A context that is derived from the top-level executor's
 	// input context and is cancelled if any of the executors in
-	// a chain fail.
+	// a chain fail (after they are all cleaned up).
 	Ctx context.Context
+
+	// The name of the executor
+	Name string
 
 	// The status tracker for the routines.
 	RoutineStatusTracker *RoutineStatusTracker
 
 	// The channel that the outputs are written to
-	OutputChan <-chan OutputType
+	OutputChan <-chan OutputChanType
+
+	// Internal use only. The original context that was passed into the
+	// top-level executor in the chain.
+	//originalCtx context.Context
 
 	// Internal use only. A function to cancel the output (passthrough) context.
 	passthroughCtxCancel context.CancelFunc
@@ -155,22 +183,44 @@ type ExecutorOutput[OutputType any] struct {
 	errorGroup *errgroup.Group
 
 	// Internal use only. The internal context used by the executor chain.
-	internalExecutorCtx context.Context
+	//internalCtx context.Context
 	// Internal use only. The cancellation function for the internal context
 	// used by the executor chain.
-	internalExecutorCtxCancel context.CancelFunc
+	//internalCtxCancel context.CancelFunc
 
-	// Internal use only. The original context that was passed into the
-	// top-level executor in the chain.
-	originalCtx context.Context
+	// Internal use only. The slice of status trackers.
+	routineStatusTrackersSlice []*RoutineStatusTracker
+	// Internal use only. The map of status trackers.
+	routineStatusTrackersMap map[string]*RoutineStatusTracker
+
+	upstreamCtxCancel *upstreamCtxCancel
 }
 
-/*
+func (eo *ExecutorOutput[OutputChanType]) Wait() error {
+	err := eo.errorGroup.Wait()
+	// We use a separate context for output/passthrough than we
+	// do for the error group, in order to handle cleanup related
+	// tasks. However, it is expected that calling "Wait()" will
+	// also finish the context, so we must manually cancel it.
+	eo.passthroughCtxCancel()
+	return err
+}
+
 func new[
-	InputChanType any,
+	InputType any,
+	OutputType any,
 	OutputChanType any,
-	OutputFuncType any,
-](ctx context.Context, input *executorInput[InputChanType, OutputChanType, chan<- any, any]) {
+](
+	ctx context.Context,
+	input executorInput[InputType, OutputType, OutputChanType],
+	outputFunc func(
+		input *saveOutputSettings[OutputChanType],
+		value OutputType,
+		inputIndex uint64,
+	) (
+		err error,
+	),
+) *ExecutorOutput[OutputChanType] {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -180,22 +230,161 @@ func new[
 	if input.Concurrency == 0 {
 		panic("input.Concurrency must be greater than 0")
 	}
-	if input.InputChannel == nil {
-		panic("input.InputChannel cannot be nil")
-	}
 	if input.Func == nil {
 		panic("input.Func cannot be nil")
 	}
+	if input.upstream != nil && input.InputChannel != nil {
+		panic("input.InputChannel cannot be provided for chained executors")
+	}
+	if input.upstream == nil && input.InputChannel == nil {
+		panic("input.InputChannel cannot be nil for top-level executors")
+	}
+	if outputFunc == nil && input.OutputChannel != nil {
+		panic("input.OutputChannel must be nil if outputFunc is nil")
+	}
 
-	outputChannelSize := zeroDefault(input.OutputChannelSize, 2*input.Concurrency)
+	// This is a context that is used internally for the routines in this executor. It
+	// gets cancelled as soon as any of the routines in this executor returns an error or,
+	// if we don't want to continue processing upstream outputs, any upstream executor
+	// encounters an error.
 
-	emptyInputChannelCallbackInterval := zeroDefault(input.EmptyInputChannelCallbackInterval, DefaultEmptyInputChannelCallbackInterval)
+	// By default, wrap the input context. This way, if the input context ever gets cancelled,
+	// it will also cancel all routines in this executor.
+	internalCtx, internalCtxCancel := context.WithCancel(ctx)
+	// If, however, we want to continue to process upstream outputs after an upstream failure
+	// (i.e. keep processing anything still remaining in the input channel), then use a version
+	// of the context that has access to the same values, but won't be cancelled if the upstream
+	// context is cancelled.
+	if input.ProcessUpstreamOutputsAfterUpstreamError {
+		internalCtx, internalCtxCancel = newExecutorContext(ctx)
+	}
 
-	fullOutputChannelCallbackInterval := zeroDefault(input.FullOutputChannelCallbackInterval, DefaultFullOutputChannelCallbackInterval)
+	// Create a context that will be passed out. This context only gets
+	// cancelled when the final routine in this executor exits out. We use
+	// this instead of the error group context because we want to complete
+	// our clean-up, callbacks, etc. before downstream users of the context
+	// cancel their own activities, which could lead to termination of the
+	// program before our cleanup/callbacks are complete.
+	passthroughCtx, passthroughCtxCancel := newExecutorContext(ctx)
 
-	outputChan := input.OutputChannel
-	if outputChan == nil {
-		outputChan := make(OutputChanType, outputChannelSize)
+	var outputChan chan OutputChanType = nil
+	// If we haven't disabled the output channel
+	if outputFunc != nil {
+		// If an external one was provided, use it
+		if input.OutputChannel != nil {
+			outputChan = input.OutputChannel
+		} else {
+			// We want outputs but a channel wasn't specified, so
+			// create one.
+			outputChan = make(chan OutputChanType, zeroDefault(input.OutputChannelSize, 2*input.Concurrency))
+		}
+	}
+
+	var inputChan <-chan InputType
+
+	var routineStatusTrackersSlice []*RoutineStatusTracker
+
+	// Create a new routine status tracker struct
+	routineStatusTracker := &RoutineStatusTracker{
+		executorName: input.Name,
+		getInputChanLength: func() int {
+			return len(input.InputChannel)
+		},
+		getOutputChanLength: func() *int {
+			if outputChan != nil {
+				l := len(outputChan)
+				return &l
+			}
+			return nil
+		},
+	}
+
+	// Check if there's an upstream executor in the chain
+	if input.upstream != nil {
+		// There's an upstream executor
+		inputChan = input.upstream.OutputChan
+		// Create a new slice (so appending to it doesn't append to upstream copies)
+		routineStatusTrackersSlice = make([]*RoutineStatusTracker, len(input.upstream.routineStatusTrackersSlice), len(input.upstream.routineStatusTrackersSlice)+1)
+		// Copy the slice
+		copy(routineStatusTrackersSlice, input.upstream.routineStatusTrackersSlice)
+		routineStatusTrackersSlice = append(routineStatusTrackersSlice, routineStatusTracker)
+	} else {
+		// If there isn't an upstream value, then this executor
+		// must be the first in the chain.
+		inputChan = input.InputChannel
+		routineStatusTrackersSlice = []*RoutineStatusTracker{routineStatusTracker}
+	}
+
+	// Create an error group for the routines. We don't need to create a
+	// context because we manage the context separately.
+	errGroup := &errgroup.Group{}
+
+	// Create a map version of the status trackers
+	routineStatusTrackersMap := map[string]*RoutineStatusTracker{}
+	for _, v := range routineStatusTrackersSlice {
+		routineStatusTrackersMap[v.executorName] = v
+	}
+
+	// A counter for the number of inputs that have been taken from
+	// the input channel.
+	var inputIndex uint64 = 0
+	var outputIndex uint64 = 0
+
+	baseCallbackInput := &BaseExecutorCallbackInput{
+		ExecutorName: input.Name,
+	}
+
+	upstreamCancellation := &upstreamCtxCancel{
+		upstream:   input.upstream.upstreamCtxCancel,
+		cancelFunc: internalCtxCancel,
+	}
+
+	routineExitSettings := &routineExitSettings[InputType, OutputType, OutputChanType]{
+		executorInput:             &input,
+		upstreamCtxCancel:         upstreamCancellation,
+		passthroughCtxCancel:      passthroughCtxCancel,
+		routineStatusTracker:      routineStatusTracker,
+		outputChan:                outputChan,
+		baseExecutorCallbackInput: baseCallbackInput,
+	}
+
+	routineSettings := &routineSettings[InputType, OutputType, OutputChanType]{
+		executorInput:                     &input,
+		internalCtx:                       internalCtx,
+		upstreamCtxCancel:                 upstreamCancellation,
+		passthroughCtxCancel:              passthroughCtxCancel,
+		routineStatusTracker:              routineStatusTracker,
+		routineStatusTrackersSlice:        routineStatusTrackersSlice,
+		routineStatusTrackersMap:          routineStatusTrackersMap,
+		inputIndexCounter:                 &inputIndex,
+		outputIndexCounter:                &outputIndex,
+		emptyInputChannelCallbackInterval: zeroDefault(input.EmptyInputChannelCallbackInterval, DefaultEmptyInputChannelCallbackInterval),
+		fullOutputChannelCallbackInterval: zeroDefault(input.FullOutputChannelCallbackInterval, DefaultFullOutputChannelCallbackInterval),
+		inputChan:                         inputChan,
+		outputChan:                        outputChan,
+		outputFunc:                        outputFunc,
+		exitFunc: getRoutineExit(
+			routineExitSettings,
+		),
+	}
+
+	// Start the same number of routines as the concurrency
+	for i := 0; i < input.Concurrency; i++ {
+		errGroup.Go(getRoutine(
+			routineSettings,
+			uint(i),
+		))
+	}
+
+	return &ExecutorOutput[OutputChanType]{
+		Ctx:                        passthroughCtx,
+		Name:                       input.Name,
+		RoutineStatusTracker:       routineStatusTracker,
+		OutputChan:                 outputChan,
+		routineStatusTrackersSlice: routineStatusTrackersSlice,
+		routineStatusTrackersMap:   routineStatusTrackersMap,
+		errorGroup:                 errGroup,
+		passthroughCtxCancel:       passthroughCtxCancel,
+		upstreamCtxCancel:          upstreamCancellation,
 	}
 }
-*/
