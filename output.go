@@ -19,7 +19,7 @@ type saveOutputSettings[
 	outputChan                        chan<- OutputChanType
 	outputIndexCounter                *uint64
 	getRoutineFunctionMetadata        func(inputIndex uint64) *RoutineFunctionMetadata
-	lastOutputTimeTracker             *lastOutputTimeTracker
+	outputTimeTracker                 *timeTracker
 	maxBatchDelayInterval             *time.Duration
 }
 
@@ -27,6 +27,7 @@ func saveOutput[OutputChanType any](
 	settings *saveOutputSettings[OutputChanType],
 	value OutputChanType,
 	inputIndex uint64,
+	forceSendBatch bool,
 ) (
 	err error,
 ) {
@@ -52,65 +53,46 @@ func saveOutput[OutputChanType any](
 		// Get the index of this output insert attempt
 		outputIndex := atomic.AddUint64(settings.outputIndexCounter, 1) - 1
 
-		if settings.fullOutputChannelCallback == nil {
+		callbackTimer := &time.Timer{}
+		if settings.fullOutputChannelCallback != nil {
+			callbackTimer = time.NewTimer(settings.fullOutputChannelCallbackInterval)
+		}
+
+		for {
+
 			select {
-			// Check if the internal executor context is done
+
+			// This will get a value from contextDoneChan when the context is cancelled.
 			case <-settings.internalCtx.Done():
-				// If so, exit
 				return settings.ctxCancelledFunc(inputIndex)
 
+			// Try to put the result in the output channel
 			case settings.outputChan <- value:
 				// The insert into the output channel succeeded
 				// Update the last output timestamp
-				settings.lastOutputTimeTracker.SetNow()
+				settings.outputTimeTracker.Reset()
 				return nil
-			}
 
-		} else {
-			// A timer for calling the full output callback on the desired interval,
-			// if a callback was provided.
-			var callbackTimer *time.Timer
-
-			// A function that resets the output timer, called when an output is stored
-			// or the timer expires and triggers a callback.
-			callbackTimerResetFunc := func() {
-				if callbackTimer != nil {
-					callbackTimer.Stop()
-				}
-				callbackTimer = time.NewTimer(settings.fullOutputChannelCallbackInterval)
-			}
-
-			for {
-
-				// Reset the callback timer
-				callbackTimerResetFunc()
-
-				select {
-
-				// This will get a value from contextDoneChan when the context is cancelled.
-				case <-settings.internalCtx.Done():
-					return settings.ctxCancelledFunc(inputIndex)
-
-				// Try to put the result in the output channel
-				case settings.outputChan <- value:
-					// The insert into the output channel succeeded
-					// Update the last output timestamp
-					settings.lastOutputTimeTracker.SetNow()
-					return nil
-
-				// This will trigger if the output channel is full for a specified
-				// amount of time AND an FullOutputChannelCallback is provided. Otherwise,
-				// it will never return.
-				case <-callbackTimer.C:
-					if err := settings.fullOutputChannelCallback(&FullOutputChannelCallbackInput{
-						RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
-						TimeSinceLastOutput:     time.Since(*(settings.lastOutputTimeTracker.Get())),
-						OutputIndex:             outputIndex,
-					}); err != nil {
-						return err
-					}
+			// This will trigger if the output channel is full for a specified
+			// amount of time AND an FullOutputChannelCallback is provided. Otherwise,
+			// it will never return.
+			case <-callbackTimer.C:
+				if err := settings.fullOutputChannelCallback(&FullOutputChannelCallbackInput{
+					RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
+					TimeSinceLastOutput:     time.Since(*(settings.outputTimeTracker.GetLast())),
+					OutputIndex:             outputIndex,
+				}); err != nil {
+					return err
 				}
 			}
+
+			// Reset the callback timer
+			if !callbackTimer.Stop() {
+				for len(callbackTimer.C) > 0 {
+					<-callbackTimer.C
+				}
+			}
+			callbackTimer.Reset(settings.fullOutputChannelCallbackInterval)
 		}
 	}
 }
@@ -119,13 +101,14 @@ func saveOutputUnbatch[OutputType any](
 	settings *saveOutputSettings[OutputType],
 	values []OutputType,
 	inputIndex uint64,
+	_ bool,
 ) (
 	err error,
 ) {
 	// Loop through each value in the result batch
 	for _, value := range values {
 		// Insert the value into the output channel
-		err = saveOutput(settings, value, inputIndex)
+		err = saveOutput(settings, value, inputIndex, false)
 		// Check if the result was a cancelled context or an error
 		if err != nil {
 			// If so, return right away
@@ -135,10 +118,11 @@ func saveOutputUnbatch[OutputType any](
 	return nil
 }
 
-func getSaveOutputBatchFunc[OutputType any](ctx context.Context, batchSize int, maxBatchInterval *time.Duration) func(
+func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 	settings *saveOutputSettings[[]OutputType],
 	value OutputType,
 	inputIndex uint64,
+	forceSendBatch bool,
 ) (
 	err error,
 ) {
@@ -146,87 +130,44 @@ func getSaveOutputBatchFunc[OutputType any](ctx context.Context, batchSize int, 
 	var batchIdx int = 0
 	var batchLock sync.Mutex
 
-	var outputTimer *time.Timer
-
-	var timerResetChan chan struct{}
-
-	timerFunc := func() {
-		// A timer for sending an incomplete batch, if a certain amount of time
-		// has passed.
-
-		for {
-			select {
-			// If the context is done, exit out
-			case <-ctx.Done():
-				return
-
-			// If we get a notification saying the timer was reset,
-			// restart the loop so we wait on a new timer
-			case <-timerResetChan:
-				continue
-
-			//
-			case <-outputTimer.C:
-				break
-			}
-
-			// The timer fired
-			batchLock.Lock()
-			if len(batch) > 0 {
-
-			}
-			if !outputTimer.Stop() {
-				<-outputTimer.C
-			}
-			outputTimer.Reset(*maxBatchInterval)
-			batchLock.Unlock()
-		}
-	}
-
 	return func(
 		settings *saveOutputSettings[[]OutputType],
 		value OutputType,
 		inputIndex uint64,
+		forceSendBatch bool,
 	) (
 		err error,
 	) {
 		batchLock.Lock()
 		defer batchLock.Unlock()
 
-		// If it's the first output, start the batch max interval timer
-		if maxBatchInterval != nil && outputTimer == nil {
-			outputTimer = time.NewTimer(*maxBatchInterval)
-			timerResetChan = make(chan struct{}, 10)
-			go timerFunc()
-		}
-
 		// If we want zero values, or it's not a zero value anyways, save
 		// the output value into the batch and increment the batch index.
-		if !settings.ignoreZeroValueOutputs || !reflect.ValueOf(value).IsZero() {
+		if !forceSendBatch && (!settings.ignoreZeroValueOutputs || !reflect.ValueOf(value).IsZero()) {
 			batch[batchIdx] = value
 			batchIdx++
-
-			// If the batch is full, output it
-			if batchIdx == batchSize-1 {
-				// Save the output
-				err = saveOutput(settings, batch, inputIndex)
-
-				// Clear the batch
-				batch = make([]OutputType, batchSize)
-
-				// Reset the batch timer if we have one
-				if maxBatchInterval != nil {
-					if !outputTimer.Stop() {
-						<-outputTimer.C
-					}
-					outputTimer.Reset(*maxBatchInterval)
-					// Send a signal that the timer was reset
-					timerResetChan <- struct{}{}
-				}
-				return err
-			}
 		}
 
-		return
+		// If we're force-sending a batch, or the batch is full, output it
+		if (forceSendBatch && batchIdx > 0) || batchIdx == batchSize {
+			// Save the output
+			if batchIdx == batchSize-1 {
+				// If it's a complete batch, send the entire slice
+				err = saveOutput(settings, batch, inputIndex, false)
+			} else {
+				// If it's an incomplete batch, send a subslice since the slice
+				// was pre-allocated and filled with zero-values (which we don't
+				// want to send downstream)
+				err = saveOutput(settings, batch[0:batchIdx], inputIndex, false)
+			}
+
+			// Clear the batch
+			batch = make([]OutputType, batchSize)
+			batchIdx = 0
+
+			return err
+		}
+
+		return nil
 	}
 }

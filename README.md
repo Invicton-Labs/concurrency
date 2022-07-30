@@ -4,7 +4,6 @@ Concurrent/parallel processing for Go.
 Desired features:
 - result batching (with timeout for sending incomplete batch)
 - result unbatching
-- optional cancellation of function
 - single input object
 - chaining
 - final (no chaining)

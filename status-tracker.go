@@ -9,8 +9,7 @@ import (
 type routineStatus int
 
 const (
-	Initializing routineStatus = iota
-	AwaitingInput
+	AwaitingInput routineStatus = iota
 	Processing
 	AwaitingOutput
 	Errored
@@ -20,8 +19,6 @@ const (
 
 func (s routineStatus) String() string {
 	switch s {
-	case Initializing:
-		return "Initializing"
 	case AwaitingInput:
 		return "AwaitingInput"
 	case Processing:
@@ -46,8 +43,6 @@ type RoutineStatusTracker struct {
 	routineStatuses sync.Map
 	// Internal use only. A counter for the number of running routines.
 	numRoutinesRunning int32
-	// Internal use only. A counter for the number of routines that are currently being initialized.
-	numRoutinesInitializing int32
 	// Internal use only. A counter for the number of routines awaiting an input.
 	numRoutinesAwaitingInput int32
 	// Internal use only. A counter for the number of routines that are currently processing an input.
@@ -72,7 +67,7 @@ type RoutineStatusTracker struct {
 	getOutputChanLength func() *int
 }
 
-func (upo *RoutineStatusTracker) updateRoutineStatus(routineIdx uint, newStatus routineStatus) {
+func (upo *RoutineStatusTracker) updateRoutineStatus(routineIdx uint, newStatus routineStatus) (isLastRoutine bool) {
 	previousStatusInterface, ok := upo.routineStatuses.Load(routineIdx)
 	if ok {
 		// If it already had a previously tracked state, decrement the corresponding counter for that state
@@ -82,8 +77,6 @@ func (upo *RoutineStatusTracker) updateRoutineStatus(routineIdx uint, newStatus 
 			return
 		}
 		switch previousStatus {
-		case Initializing:
-			atomic.AddInt32(&upo.numRoutinesInitializing, -1)
 		case AwaitingInput:
 			atomic.AddInt32(&upo.numRoutinesAwaitingInput, -1)
 		case Processing:
@@ -99,15 +92,10 @@ func (upo *RoutineStatusTracker) updateRoutineStatus(routineIdx uint, newStatus 
 		default:
 			panic(fmt.Errorf("unknown routine status: %d", previousStatus))
 		}
-	} else {
-		// If it's the first status update, mark it as a running routine
-		atomic.AddInt32(&upo.numRoutinesRunning, 1)
 	}
 	upo.routineStatuses.Store(routineIdx, newStatus)
 	// Now update the counter corresponding to the new state
 	switch newStatus {
-	case Initializing:
-		atomic.AddInt32(&upo.numRoutinesInitializing, 1)
 	case AwaitingInput:
 		atomic.AddInt32(&upo.numRoutinesAwaitingInput, 1)
 	case Processing:
@@ -117,18 +105,25 @@ func (upo *RoutineStatusTracker) updateRoutineStatus(routineIdx uint, newStatus 
 	case Errored:
 		atomic.AddInt32(&upo.numRoutinesErrored, 1)
 		// If it's errored, it's done, so reduce the number of running routines
-		atomic.AddInt32(&upo.numRoutinesRunning, -1)
+		if atomic.AddInt32(&upo.numRoutinesRunning, -1) == 0 {
+			isLastRoutine = true
+		}
 	case ContextDone:
 		atomic.AddInt32(&upo.numRoutinesContextDone, 1)
 		// If it's errored, it's done, so reduce the number of running routines
-		atomic.AddInt32(&upo.numRoutinesRunning, -1)
+		if atomic.AddInt32(&upo.numRoutinesRunning, -1) == 0 {
+			isLastRoutine = true
+		}
 	case Finished:
 		atomic.AddInt32(&upo.numRoutinesFinished, 1)
 		// If it's finished, it's done, so reduce the number of running routines
-		atomic.AddInt32(&upo.numRoutinesRunning, -1)
+		if atomic.AddInt32(&upo.numRoutinesRunning, -1) == 0 {
+			isLastRoutine = true
+		}
 	default:
 		panic(fmt.Errorf("unknown routine status: %d", newStatus))
 	}
+	return
 }
 
 func (rst *RoutineStatusTracker) GetExecutorName() string {
@@ -136,9 +131,6 @@ func (rst *RoutineStatusTracker) GetExecutorName() string {
 }
 func (rst *RoutineStatusTracker) GetNumRoutinesRunning() int32 {
 	return atomic.LoadInt32(&rst.numRoutinesRunning)
-}
-func (rst *RoutineStatusTracker) GetNumRoutinesInitializing() int32 {
-	return atomic.LoadInt32(&rst.numRoutinesInitializing)
 }
 func (rst *RoutineStatusTracker) GetNumRoutinesAwaitingInput() int32 {
 	return atomic.LoadInt32(&rst.numRoutinesAwaitingInput)

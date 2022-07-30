@@ -13,8 +13,9 @@ type routineExitSettings[
 	InputType any,
 	OutputType any,
 	OutputChanType any,
+	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ] struct {
-	executorInput             *executorInput[InputType, OutputType, OutputChanType]
+	executorInput             *executorInput[InputType, OutputType, OutputChanType, ProcessingFuncType]
 	upstreamCtxCancel         *upstreamCtxCancel
 	passthroughCtxCancel      context.CancelFunc
 	routineStatusTracker      *RoutineStatusTracker
@@ -26,12 +27,13 @@ func getRoutineExit[
 	InputType any,
 	OutputType any,
 	OutputChanType any,
+	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ](
-	settings *routineExitSettings[InputType, OutputType, OutputChanType],
-) func(err error, routineIdx uint) error {
+	settings *routineExitSettings[InputType, OutputType, OutputChanType, ProcessingFuncType],
+) func(err error, routineIdx uint, successCleanupFunc func() error) error {
 	var errLock sync.Mutex
 	var exitErr error
-	return func(err error, routineIdx uint) error {
+	return func(err error, routineIdx uint, successCleanupFunc func() error) error {
 
 		// Convert panics into errors
 		if r := recover(); r != nil {
@@ -41,6 +43,8 @@ func getRoutineExit[
 				err = fmt.Errorf("%v", r)
 			}
 		}
+
+		isLastRoutine := false
 
 		// Check if this routine threw an error
 		if err != nil {
@@ -55,9 +59,9 @@ func getRoutineExit[
 
 			// Update the status of this routine
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				settings.routineStatusTracker.updateRoutineStatus(routineIdx, ContextDone)
+				isLastRoutine = settings.routineStatusTracker.updateRoutineStatus(routineIdx, ContextDone)
 			} else {
-				settings.routineStatusTracker.updateRoutineStatus(routineIdx, Errored)
+				isLastRoutine = settings.routineStatusTracker.updateRoutineStatus(routineIdx, Errored)
 			}
 
 			// As soon as one routine fails, it's game over for everything in this executor
@@ -66,11 +70,11 @@ func getRoutineExit[
 			settings.upstreamCtxCancel.cancel()
 
 		} else {
-			settings.routineStatusTracker.updateRoutineStatus(routineIdx, Finished)
+			isLastRoutine = settings.routineStatusTracker.updateRoutineStatus(routineIdx, Finished)
 		}
 
 		// If it's the last routine to exit, do some special things
-		if settings.routineStatusTracker.GetNumRoutinesRunning() == 0 {
+		if isLastRoutine {
 
 			// Get the original error that triggered the termination of the routines.
 			errLock.Lock()
@@ -155,6 +159,12 @@ func getRoutineExit[
 				} else {
 					// This executor completed successfully, and all upstream executors also completed
 					// successfully.
+
+					// If we're batching outputs, push the final batch
+					if successCleanupFunc != nil {
+						successCleanupFunc()
+					}
+
 					// Run the callback for the executor's successful completion.
 					if settings.executorInput.ExecutorSuccessCallback != nil {
 						newErr := settings.executorInput.ExecutorSuccessCallback(&ExecutorSuccessCallbackInput{
@@ -195,42 +205,48 @@ type routineSettings[
 	InputType any,
 	OutputType any,
 	OutputChanType any,
+	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ] struct {
-	executorInput                     *executorInput[InputType, OutputType, OutputChanType]
-	internalCtx                       context.Context
-	upstreamCtxCancel                 *upstreamCtxCancel
-	passthroughCtxCancel              context.CancelFunc
-	routineStatusTracker              *RoutineStatusTracker
-	routineStatusTrackersSlice        []*RoutineStatusTracker
-	routineStatusTrackersMap          map[string]*RoutineStatusTracker
-	inputIndexCounter                 *uint64
-	outputIndexCounter                *uint64
-	fullOutputChannelCallbackInterval time.Duration
-	emptyInputChannelCallbackInterval time.Duration
-	inputChan                         <-chan InputType
-	outputChan                        chan OutputChanType
-	outputFunc                        func(
+	executorInput                           *executorInput[InputType, OutputType, OutputChanType, ProcessingFuncType]
+	internalCtx                             context.Context
+	upstreamCtxCancel                       *upstreamCtxCancel
+	passthroughCtxCancel                    context.CancelFunc
+	routineStatusTracker                    *RoutineStatusTracker
+	routineStatusTrackersSlice              []*RoutineStatusTracker
+	routineStatusTrackersMap                map[string]*RoutineStatusTracker
+	inputIndexCounter                       *uint64
+	outputIndexCounter                      *uint64
+	fullOutputChannelCallbackInterval       time.Duration
+	emptyInputChannelCallbackInterval       time.Duration
+	outputTimeTracker                       *timeTracker
+	processingFuncWithInputWithOutput       ProcessingFuncWithInputWithOutput[InputType, OutputType]
+	processingFuncWithInputWithoutOutput    ProcessingFuncWithInputWithoutOutput[InputType]
+	processingFuncWithoutInputWithOutput    ProcessingFuncWithoutInputWithOutput[OutputType]
+	processingFuncWithoutInputWithoutOutput ProcessingFuncWithoutInputWithoutOutput
+	forceWaitForInput                       bool
+	inputChan                               <-chan InputType
+	isBatchOutput                           bool
+	outputChan                              chan OutputChanType
+	outputFunc                              func(
 		settings *saveOutputSettings[OutputChanType],
 		value OutputType,
 		inputIndex uint64,
+		forceSendBatch bool,
 	) (
 		err error,
 	)
-	exitFunc func(err error, routineIdx uint) error
+	exitFunc func(err error, routineIdx uint, successCleanupFunc func() error) error
 }
 
 func getRoutine[
 	InputType any,
 	OutputType any,
 	OutputChanType any,
+	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ](
-	settings *routineSettings[InputType, OutputType, OutputChanType],
+	settings *routineSettings[InputType, OutputType, OutputChanType, ProcessingFuncType],
 	routineIdx uint,
 ) func() error {
-	// Mark this new routine as initializing
-	settings.routineStatusTracker.updateRoutineStatus(routineIdx, Initializing)
-
-	lastOutput := &lastOutputTimeTracker{}
 
 	routineFunctionMetadata := &RoutineFunctionMetadata{
 		ExecutorName:               settings.executorInput.Name,
@@ -261,7 +277,7 @@ func getRoutine[
 		return settings.internalCtx.Err()
 	}
 
-	getInputSettings := &getInputSettings[InputType, OutputType, OutputChanType]{
+	getInputSettings := &getInputSettings[InputType, OutputType, OutputChanType, ProcessingFuncType]{
 		ctxCancelledFunc:                  ctxCancelledFunc,
 		internalCtx:                       settings.internalCtx,
 		executorInput:                     settings.executorInput,
@@ -279,39 +295,71 @@ func getRoutine[
 		outputChan:                        settings.outputChan,
 		outputIndexCounter:                settings.outputIndexCounter,
 		getRoutineFunctionMetadata:        getRoutineFunctionMetadata,
-		lastOutputTimeTracker:             lastOutput,
+		outputTimeTracker:                 settings.outputTimeTracker,
+	}
+
+	var successCleanupFunc func() error
+	if settings.isBatchOutput {
+		successCleanupFunc = func() error {
+			var output OutputType
+			return settings.outputFunc(saveOutputSettings, output, atomic.LoadUint64(settings.inputIndexCounter), true)
+		}
 	}
 
 	return func() (err error) {
 
 		defer func() {
-			err = settings.exitFunc(err, routineIdx)
+			err = settings.exitFunc(err, routineIdx, successCleanupFunc)
 		}()
 
-		// These track the times of the last successful input pull and
-		// output push
-		now := time.Now()
-		lastInput := now
+		// This tracks the times of the last successful input pull
+		lastInput := time.Now()
 
 		var metadata *RoutineFunctionMetadata
+
+		// If we want to force get an input, or if it's a processing function that uses an input, get an input for each loop
+		shouldGetInput := settings.forceWaitForInput || settings.processingFuncWithInputWithOutput != nil || settings.processingFuncWithInputWithoutOutput != nil
+
+		var output OutputType
+		var input InputType
+		var forceSendBatch bool
 
 		for {
 			// Find the index of this input retrieval
 			inputIndex := atomic.AddUint64(settings.inputIndexCounter, 1) - 1
 
-			// Get the input from the input channel
-			input, inputChanClosed, err := getInput(getInputSettings, inputIndex, &lastInput)
-			// If there was an error, or the input channel is closed, exit
-			if err != nil || inputChanClosed {
-				return err
-			}
-			// Update the last input timestamp
-			lastInput = time.Now()
-
+			// If we want metadata for the function, get it
 			if settings.executorInput.IncludeMetadataInFunctionCalls {
 				metadata = getRoutineFunctionMetadata(inputIndex)
 			}
-			output, err := settings.executorInput.Func(settings.internalCtx, input, metadata)
+
+			if shouldGetInput {
+				// Get the input from the input channel
+				var inputChanClosed bool
+				input, inputChanClosed, forceSendBatch, err = getInput(getInputSettings, inputIndex, &lastInput, settings.outputTimeTracker.TimerChan())
+				// If there was an error, or the input channel is closed, exit
+				if err != nil || inputChanClosed {
+					return err
+				}
+				// Update the last input timestamp
+				lastInput = time.Now()
+			}
+
+			switch {
+			case settings.processingFuncWithInputWithOutput != nil:
+				output, err = settings.processingFuncWithInputWithOutput(settings.internalCtx, input, metadata)
+				break
+			case settings.processingFuncWithInputWithoutOutput != nil:
+				err = settings.processingFuncWithInputWithoutOutput(settings.internalCtx, input, metadata)
+				break
+			case settings.processingFuncWithoutInputWithOutput != nil:
+				output, err = settings.processingFuncWithoutInputWithOutput(settings.internalCtx, metadata)
+				break
+			case settings.processingFuncWithoutInputWithoutOutput != nil:
+				err = settings.processingFuncWithoutInputWithoutOutput(settings.internalCtx, metadata)
+			}
+
+			// The processing function returned an error
 			if err != nil {
 				// First check if the context has been cancelled. If it has been, return
 				// that error instead of the processing error, since we don't really care
@@ -336,7 +384,11 @@ func getRoutine[
 
 			// If there's an output function to output with, output the result
 			if settings.outputFunc != nil {
-				err := settings.outputFunc(saveOutputSettings, output, inputIndex)
+				// If forceSendBatch is true (when a batch output timer times out), this will
+				// only output the existing batch and will not actually add a value to the batch.
+				// Otherwise, it sends the output either into the batch or directly into the
+				// output channel, depending on whether batching is being used.
+				err := settings.outputFunc(saveOutputSettings, output, inputIndex, forceSendBatch)
 				if err != nil {
 					return err
 				}

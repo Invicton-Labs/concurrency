@@ -2,7 +2,7 @@ package concurrency
 
 import (
 	"context"
-	"sync"
+	"reflect"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -13,26 +13,12 @@ var (
 	DefaultFullOutputChannelCallbackInterval time.Duration = 1 * time.Second
 )
 
-type lastOutputTimeTracker struct {
-	lock sync.Mutex
-	t    *time.Time
-}
-
-func (lott *lastOutputTimeTracker) Get() *time.Time {
-	lott.lock.Lock()
-	defer lott.lock.Unlock()
-	if lott.t == nil {
-		t := time.Now()
-		lott.t = &t
-	}
-	return lott.t
-}
-
-func (lott *lastOutputTimeTracker) SetNow() {
-	lott.lock.Lock()
-	defer lott.lock.Unlock()
-	t := time.Now()
-	lott.t = &t
+type ProcessingFuncWithInputWithOutput[InputType any, OutputType any] func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output OutputType, err error)
+type ProcessingFuncWithInputWithoutOutput[InputType any] func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (err error)
+type ProcessingFuncWithoutInputWithOutput[OutputType any] func(ctx context.Context, metadata *RoutineFunctionMetadata) (output OutputType, err error)
+type ProcessingFuncWithoutInputWithoutOutput func(ctx context.Context, metadata *RoutineFunctionMetadata) (err error)
+type ProcessingFuncTypes[InputType any, OutputType any] interface {
+	ProcessingFuncWithInputWithOutput[InputType, OutputType] | ProcessingFuncWithInputWithoutOutput[InputType] | ProcessingFuncWithoutInputWithOutput[OutputType] | ProcessingFuncWithoutInputWithoutOutput
 }
 
 // The common set of values for callbacks that are specific to single routine
@@ -58,6 +44,7 @@ type executorInput[
 	InputType any,
 	OutputType any,
 	OutputChanType any,
+	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ] struct {
 	// REQUIRED. A name that can be used in logs for this executor,
 	// and for finding it in callback inputs.
@@ -67,10 +54,10 @@ type executorInput[
 	Concurrency int
 
 	// REQUIRED. The function that processes an input into an output.
-	Func func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output OutputType, err error)
+	Func ProcessingFuncType
 
 	// REQUIRED FOR TOP-LEVEL EXECUTORS (not for chained executors). The channel that has input values.
-	InputChannel <-chan InputType
+	InputChannel chan InputType
 
 	// OPTIONAL. The size of the output channel that gets created.
 	// Defaults to the twice the Concurrency value. Only applies if
@@ -138,6 +125,14 @@ type executorInput[
 	// and the context was cancelled.
 	ExecutorContextDoneCallback func(input *ExecutorContextDoneCallbackInput) error
 
+	// The number of elements in each batch. Only used for executors that batch outputs.
+	BatchSize int
+
+	// The maximum amount of time to hold a batch before outputting it, even if it's
+	// not full. If not provided, it will always wait for a full batch before outputting
+	// it. Only used for executors that batch outputs.
+	BatchMaxInterval *time.Duration
+
 	// Internal use only. Output from the upstream executor.
 	upstream *ExecutorOutput[InputType]
 }
@@ -171,10 +166,6 @@ type ExecutorOutput[OutputChanType any] struct {
 
 	// The channel that the outputs are written to
 	OutputChan <-chan OutputChanType
-
-	// Internal use only. The original context that was passed into the
-	// top-level executor in the chain.
-	//originalCtx context.Context
 
 	// Internal use only. A function to cancel the output (passthrough) context.
 	passthroughCtxCancel context.CancelFunc
@@ -210,16 +201,20 @@ func new[
 	InputType any,
 	OutputType any,
 	OutputChanType any,
+	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ](
 	ctx context.Context,
-	input executorInput[InputType, OutputType, OutputChanType],
+	input executorInput[InputType, OutputType, OutputChanType, ProcessingFuncType],
 	outputFunc func(
 		input *saveOutputSettings[OutputChanType],
 		value OutputType,
 		inputIndex uint64,
+		forceSendBatch bool,
 	) (
 		err error,
 	),
+	batchMaxInterval *time.Duration,
+	forceWaitForInput bool,
 ) *ExecutorOutput[OutputChanType] {
 	if ctx == nil {
 		ctx = context.Background()
@@ -286,7 +281,8 @@ func new[
 
 	// Create a new routine status tracker struct
 	routineStatusTracker := &RoutineStatusTracker{
-		executorName: input.Name,
+		executorName:       input.Name,
+		numRoutinesRunning: int32(input.Concurrency),
 		getInputChanLength: func() int {
 			return len(input.InputChannel)
 		},
@@ -325,6 +321,8 @@ func new[
 		routineStatusTrackersMap[v.executorName] = v
 	}
 
+	outputTimeTracker := newTimeTracker(input.BatchMaxInterval)
+
 	// A counter for the number of inputs that have been taken from
 	// the input channel.
 	var inputIndex uint64 = 0
@@ -335,11 +333,13 @@ func new[
 	}
 
 	upstreamCancellation := &upstreamCtxCancel{
-		upstream:   input.upstream.upstreamCtxCancel,
 		cancelFunc: internalCtxCancel,
 	}
+	if input.upstream != nil {
+		upstreamCancellation.upstream = input.upstream.upstreamCtxCancel
+	}
 
-	routineExitSettings := &routineExitSettings[InputType, OutputType, OutputChanType]{
+	routineExitSettings := &routineExitSettings[InputType, OutputType, OutputChanType, ProcessingFuncType]{
 		executorInput:             &input,
 		upstreamCtxCancel:         upstreamCancellation,
 		passthroughCtxCancel:      passthroughCtxCancel,
@@ -348,7 +348,30 @@ func new[
 		baseExecutorCallbackInput: baseCallbackInput,
 	}
 
-	routineSettings := &routineSettings[InputType, OutputType, OutputChanType]{
+	var isBatchOutput bool
+	if outputChan != nil {
+		var outputZero OutputType
+		outputType := reflect.TypeOf(outputZero)
+		var outputChanZero OutputChanType
+		outputChanType := reflect.TypeOf(outputChanZero)
+		canElem := false
+		switch outputChanType.Kind() {
+		case reflect.Array:
+			canElem = true
+		case reflect.Chan:
+			canElem = true
+		case reflect.Map:
+			canElem = true
+		case reflect.Pointer:
+			canElem = true
+		case reflect.Slice:
+			canElem = true
+
+		}
+		isBatchOutput = canElem && outputChanType.Elem() == outputType
+	}
+
+	routineSettings := &routineSettings[InputType, OutputType, OutputChanType, ProcessingFuncType]{
 		executorInput:                     &input,
 		internalCtx:                       internalCtx,
 		upstreamCtxCancel:                 upstreamCancellation,
@@ -363,9 +386,53 @@ func new[
 		inputChan:                         inputChan,
 		outputChan:                        outputChan,
 		outputFunc:                        outputFunc,
+		outputTimeTracker:                 outputTimeTracker,
+		isBatchOutput:                     isBatchOutput,
+		forceWaitForInput:                 forceWaitForInput,
 		exitFunc: getRoutineExit(
 			routineExitSettings,
 		),
+	}
+
+	// This handles the two different types of processing functions we might get
+	switch any(input.Func).(type) {
+	case ProcessingFuncWithInputWithOutput[InputType, OutputType]:
+		routineSettings.processingFuncWithInputWithOutput = any(input.Func).(ProcessingFuncWithInputWithOutput[InputType, OutputType])
+		if inputChan == nil {
+			panic("Cannot have a processing func with an input, but no input channel to pull inputs from")
+		}
+		if outputChan == nil {
+			panic("Cannot have a processing func with an output, but no output channel to output to")
+		}
+		break
+	case ProcessingFuncWithInputWithoutOutput[InputType]:
+		if inputChan == nil {
+			panic("Cannot have a processing func with an input, but no input channel to pull inputs from")
+		}
+		if outputChan != nil {
+			panic("Cannot have an output channel when the processing func does not return an output")
+		}
+		routineSettings.processingFuncWithInputWithoutOutput = any(input.Func).(ProcessingFuncWithInputWithoutOutput[InputType])
+		break
+	case ProcessingFuncWithoutInputWithOutput[OutputType]:
+		if inputChan != nil && !forceWaitForInput {
+			panic("Cannot have an input channel when the processing func does not return an input")
+		}
+		if outputChan == nil {
+			panic("Cannot have a processing func with an output, but no output channel to output to")
+		}
+		routineSettings.processingFuncWithoutInputWithOutput = any(input.Func).(ProcessingFuncWithoutInputWithOutput[OutputType])
+	case ProcessingFuncWithoutInputWithoutOutput:
+		if inputChan != nil && !forceWaitForInput {
+			panic("Cannot have an input channel when the processing func does not return an input")
+		}
+		if outputChan != nil {
+			panic("Cannot have an output channel when the processing func does not return an output")
+		}
+		routineSettings.processingFuncWithoutInputWithoutOutput = any(input.Func).(ProcessingFuncWithoutInputWithoutOutput)
+		break
+	default:
+		panic("Unrecognized processing function signature")
 	}
 
 	// Start the same number of routines as the concurrency
