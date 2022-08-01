@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync/atomic"
@@ -138,22 +139,31 @@ func TestExecutorBatchTimeout(t *testing.T) {
 }
 
 func executorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
-	ctx := context.Background()
+	ctx, ctxCancel := context.WithCancel(context.Background())
 	inputChan := make(chan int, inputCount)
 	for i := 1; i <= inputCount; i++ {
 		inputChan <- i
 	}
 	close(inputChan)
 	batchMaxInterval := 100 * time.Millisecond
-	executorSleepDuration := 30 * time.Millisecond
 	batchSize := 100
+	sleepPoint := 250
+	if inputCount < sleepPoint {
+		sleepPoint = inputCount
+	}
 	executor := concurrency.ExecutorBatch(ctx, concurrency.ExecutorBatchInput[int, uint]{
-		Name:              "test-executor-batch-no-timeout-1",
-		Concurrency:       numRoutines,
-		OutputChannelSize: inputCount * 2,
-		InputChannel:      inputChan,
+		Name:                           "test-executor-batch-timeout-1",
+		Concurrency:                    numRoutines,
+		OutputChannelSize:              inputCount * 2,
+		InputChannel:                   inputChan,
+		IncludeMetadataInFunctionCalls: true,
 		Func: func(ctx context.Context, input int, metadata *concurrency.RoutineFunctionMetadata) (uint, error) {
-			time.Sleep(executorSleepDuration)
+			if metadata.InputIndex >= uint64(sleepPoint) {
+				select {
+				case <-ctx.Done():
+				case <-time.After(100 * time.Hour):
+				}
+			}
 			return uint(input), nil
 		},
 		BatchSize:                 batchSize,
@@ -161,42 +171,26 @@ func executorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 		FullOutputChannelCallback: fullOutput,
 		BatchMaxInterval:          &batchMaxInterval,
 	})
-	if err := executor.Wait(); err != nil {
-		t.Error(err)
-		return
-	}
-	batchCount := 0
-	expectedBatchSize := int(batchMaxInterval/executorSleepDuration) * numRoutines
-	expectedBatchCount := int(math.Ceil(float64(inputCount)/float64(expectedBatchSize)) + 0.1)
-	finalBatchSize := inputCount % expectedBatchSize
+	expectedBatchCount := int(math.Ceil(float64(sleepPoint)/float64(batchSize)) + 0.1)
+	finalBatchSize := sleepPoint % batchSize
 	if finalBatchSize == 0 {
-		finalBatchSize = expectedBatchSize
+		finalBatchSize = batchSize
 	}
-	for {
-		select {
-		case v, open := <-executor.OutputChan:
-			if !open {
-				goto done
-			}
-			batchCount++
-			if batchCount < expectedBatchCount && len(v) != expectedBatchSize {
-				t.Errorf("Expected non-final output batch to be full with %d values, but it had %d values", expectedBatchSize, len(v))
-				return
-			}
-			if batchCount == expectedBatchCount && len(v) != finalBatchSize {
-				t.Errorf("Expected final output batch to have %d values, but it had %d values", finalBatchSize, len(v))
-				return
-			}
-			if batchCount > expectedBatchCount {
-				t.Errorf("Received more batches than expected (%d)", expectedBatchCount)
-				return
-			}
+	for i := 0; i < expectedBatchCount; i++ {
+		v, open := <-executor.OutputChan
+		if !open {
+			t.Fatalf("Channel unexpectedly closed")
+		}
+		if i < expectedBatchCount-1 && len(v) != batchSize {
+			t.Fatalf("Expected non-final output batch to be full with %d values, but it had %d values", batchSize, len(v))
+		}
+		if i == expectedBatchCount-1 && len(v) != finalBatchSize {
+			t.Fatalf("Expected final output batch to have %d values, but it had %d values", finalBatchSize, len(v))
 		}
 	}
-done:
-	if batchCount != expectedBatchCount {
-		t.Errorf("Received fewer batches (%d) than expected (%d)", batchCount, expectedBatchCount)
-		return
+	ctxCancel()
+	if err := executor.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Expected a context cancelled error, but got %v", err)
 	}
 	verifyCleanup(t, executor)
 }

@@ -93,11 +93,11 @@ type executorInput[
 	// concurrently by different routines.
 	EmptyInputChannelCallback func(input *EmptyInputChannelCallbackInput) error
 
-	// How long to wait to write an output before calling the full outputcallback
+	// OPTIONAL. How long to wait to write an output before calling the full outputcallback
 	// function, IF one has been provided.  Defaults to the
 	// DefaultFullOutputChannelCallbackInterval value.
 	FullOutputChannelCallbackInterval time.Duration
-	// A function to call when the output channel is full and an output cannot
+	// OPTIONAL. A function to call when the output channel is full and an output cannot
 	// be written to it. Each routine has its own separate timer, so this could be called many
 	// times concurrently by different routines.
 	// Only applies if the these options are for a non-final executor.
@@ -125,10 +125,10 @@ type executorInput[
 	// and the context was cancelled.
 	ExecutorContextDoneCallback func(input *ExecutorContextDoneCallbackInput) error
 
-	// The number of elements in each batch. Only used for executors that batch outputs.
+	// OPTIONAL. The number of elements in each batch. Only used for executors that batch outputs.
 	BatchSize int
 
-	// The maximum amount of time to hold a batch before outputting it, even if it's
+	// OPTIONAL. The maximum amount of time to hold a batch before outputting it, even if it's
 	// not full. If not provided, it will always wait for a full batch before outputting
 	// it. Only used for executors that batch outputs.
 	BatchMaxInterval *time.Duration

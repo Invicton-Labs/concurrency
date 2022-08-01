@@ -31,6 +31,9 @@ func saveOutput[OutputChanType any](
 ) (
 	err error,
 ) {
+	if forceSendBatch {
+		panic("Unexpected use of forceSendBatch")
+	}
 
 	select {
 	// If the internal context is done, that means that
@@ -101,10 +104,13 @@ func saveOutputUnbatch[OutputType any](
 	settings *saveOutputSettings[OutputType],
 	values []OutputType,
 	inputIndex uint64,
-	_ bool,
+	forceSendBatch bool,
 ) (
 	err error,
 ) {
+	if forceSendBatch {
+		panic("Unexpected use of forceSendBatch")
+	}
 	// Loop through each value in the result batch
 	for _, value := range values {
 		// Insert the value into the output channel

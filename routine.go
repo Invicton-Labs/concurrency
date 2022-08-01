@@ -30,19 +30,10 @@ func getRoutineExit[
 	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ](
 	settings *routineExitSettings[InputType, OutputType, OutputChanType, ProcessingFuncType],
-) func(err error, routineIdx uint, successCleanupFunc func() error) error {
+) func(err error, routineIdx uint, cleanupFunc func() error) error {
 	var errLock sync.Mutex
 	var exitErr error
-	return func(err error, routineIdx uint, successCleanupFunc func() error) error {
-
-		// Convert panics into errors
-		if r := recover(); r != nil {
-			if perr, ok := r.(error); ok {
-				err = perr
-			} else {
-				err = fmt.Errorf("%v", r)
-			}
-		}
+	return func(err error, routineIdx uint, cleanupFunc func() error) error {
 
 		isLastRoutine := false
 
@@ -161,12 +152,24 @@ func getRoutineExit[
 					// successfully.
 
 					// If we're batching outputs, push the final batch
-					if successCleanupFunc != nil {
-						successCleanupFunc()
+					if cleanupFunc != nil {
+						err = cleanupFunc()
+						if err != nil {
+							// Run the callback for the executor's failure
+							if settings.executorInput.ExecutorErrorCallback != nil {
+								newErr := settings.executorInput.ExecutorErrorCallback(&ExecutorErrorCallbackInput{
+									settings.baseExecutorCallbackInput,
+									err,
+								})
+								if newErr != nil {
+									err = newErr
+								}
+							}
+						}
 					}
 
 					// Run the callback for the executor's successful completion.
-					if settings.executorInput.ExecutorSuccessCallback != nil {
+					if err == nil && settings.executorInput.ExecutorSuccessCallback != nil {
 						newErr := settings.executorInput.ExecutorSuccessCallback(&ExecutorSuccessCallbackInput{
 							settings.baseExecutorCallbackInput,
 						})
@@ -235,7 +238,7 @@ type routineSettings[
 	) (
 		err error,
 	)
-	exitFunc func(err error, routineIdx uint, successCleanupFunc func() error) error
+	exitFunc func(err error, routineIdx uint, cleanupFunc func() error) error
 }
 
 func getRoutine[
@@ -298,9 +301,9 @@ func getRoutine[
 		outputTimeTracker:                 settings.outputTimeTracker,
 	}
 
-	var successCleanupFunc func() error
+	var cleanupFunc func() error
 	if settings.isBatchOutput {
-		successCleanupFunc = func() error {
+		cleanupFunc = func() error {
 			var output OutputType
 			return settings.outputFunc(saveOutputSettings, output, atomic.LoadUint64(settings.inputIndexCounter), true)
 		}
@@ -309,7 +312,15 @@ func getRoutine[
 	return func() (err error) {
 
 		defer func() {
-			err = settings.exitFunc(err, routineIdx, successCleanupFunc)
+			// Convert panics into errors
+			if r := recover(); r != nil {
+				if perr, ok := r.(error); ok {
+					err = perr
+				} else {
+					err = fmt.Errorf("%v", r)
+				}
+			}
+			err = settings.exitFunc(err, routineIdx, cleanupFunc)
 		}()
 
 		// This tracks the times of the last successful input pull
@@ -345,41 +356,43 @@ func getRoutine[
 				lastInput = time.Now()
 			}
 
-			switch {
-			case settings.processingFuncWithInputWithOutput != nil:
-				output, err = settings.processingFuncWithInputWithOutput(settings.internalCtx, input, metadata)
-				break
-			case settings.processingFuncWithInputWithoutOutput != nil:
-				err = settings.processingFuncWithInputWithoutOutput(settings.internalCtx, input, metadata)
-				break
-			case settings.processingFuncWithoutInputWithOutput != nil:
-				output, err = settings.processingFuncWithoutInputWithOutput(settings.internalCtx, metadata)
-				break
-			case settings.processingFuncWithoutInputWithoutOutput != nil:
-				err = settings.processingFuncWithoutInputWithoutOutput(settings.internalCtx, metadata)
-			}
-
-			// The processing function returned an error
-			if err != nil {
-				// First check if the context has been cancelled. If it has been, return
-				// that error instead of the processing error, since we don't really care
-				// about the processing error if the context was cancelled anyways.
-				select {
-				case <-settings.internalCtx.Done():
-					return ctxCancelledFunc(inputIndex)
-				default:
+			if !forceSendBatch {
+				switch {
+				case settings.processingFuncWithInputWithOutput != nil:
+					output, err = settings.processingFuncWithInputWithOutput(settings.internalCtx, input, metadata)
 					break
+				case settings.processingFuncWithInputWithoutOutput != nil:
+					err = settings.processingFuncWithInputWithoutOutput(settings.internalCtx, input, metadata)
+					break
+				case settings.processingFuncWithoutInputWithOutput != nil:
+					output, err = settings.processingFuncWithoutInputWithOutput(settings.internalCtx, metadata)
+					break
+				case settings.processingFuncWithoutInputWithoutOutput != nil:
+					err = settings.processingFuncWithoutInputWithoutOutput(settings.internalCtx, metadata)
 				}
 
-				// If there's a callback for the function throwing an error, call it
-				if settings.executorInput.RoutineErrorCallback != nil {
-					return settings.executorInput.RoutineErrorCallback(&RoutineErrorCallbackInput{
-						RoutineFunctionMetadata: getRoutineFunctionMetadata(inputIndex),
-						Err:                     err,
-					})
+				// The processing function returned an error
+				if err != nil {
+					// First check if the context has been cancelled. If it has been, return
+					// that error instead of the processing error, since we don't really care
+					// about the processing error if the context was cancelled anyways.
+					select {
+					case <-settings.internalCtx.Done():
+						return ctxCancelledFunc(inputIndex)
+					default:
+						break
+					}
+
+					// If there's a callback for the function throwing an error, call it
+					if settings.executorInput.RoutineErrorCallback != nil {
+						return settings.executorInput.RoutineErrorCallback(&RoutineErrorCallbackInput{
+							RoutineFunctionMetadata: getRoutineFunctionMetadata(inputIndex),
+							Err:                     err,
+						})
+					}
+					// Otherwise, just return the error
+					return err
 				}
-				// Otherwise, just return the error
-				return err
 			}
 
 			// If there's an output function to output with, output the result
