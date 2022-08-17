@@ -404,7 +404,6 @@ func new[
 		if outputChan == nil {
 			panic("Cannot have a processing func with an output, but no output channel to output to")
 		}
-		break
 	case ProcessingFuncWithInputWithoutOutput[InputType]:
 		if inputChan == nil {
 			panic("Cannot have a processing func with an input, but no input channel to pull inputs from")
@@ -413,7 +412,6 @@ func new[
 			panic("Cannot have an output channel when the processing func does not return an output")
 		}
 		routineSettings.processingFuncWithInputWithoutOutput = any(input.Func).(ProcessingFuncWithInputWithoutOutput[InputType])
-		break
 	case ProcessingFuncWithoutInputWithOutput[OutputType]:
 		if inputChan != nil && !forceWaitForInput {
 			panic("Cannot have an input channel when the processing func does not return an input")
@@ -430,7 +428,6 @@ func new[
 			panic("Cannot have an output channel when the processing func does not return an output")
 		}
 		routineSettings.processingFuncWithoutInputWithoutOutput = any(input.Func).(ProcessingFuncWithoutInputWithoutOutput)
-		break
 	default:
 		panic("Unrecognized processing function signature")
 	}

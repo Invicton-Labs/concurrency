@@ -20,7 +20,6 @@ type saveOutputSettings[
 	outputIndexCounter                *uint64
 	getRoutineFunctionMetadata        func(inputIndex uint64) *RoutineFunctionMetadata
 	outputTimeTracker                 *timeTracker
-	maxBatchDelayInterval             *time.Duration
 }
 
 func saveOutput[OutputChanType any](
@@ -172,6 +171,10 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 			batchIdx = 0
 
 			return err
+		} else if forceSendBatch {
+			// If it's a force batch send, but we didn't actually
+			// send a batch, reset the output timer anyways
+			settings.outputTimeTracker.Reset()
 		}
 
 		return nil

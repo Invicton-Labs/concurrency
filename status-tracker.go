@@ -32,7 +32,7 @@ func (s routineStatus) String() string {
 	case Finished:
 		return "Finished"
 	default:
-		panic(fmt.Errorf("Unkown routineStatus: %d", s))
+		panic(fmt.Errorf("unkown routineStatus: %d", s))
 	}
 }
 

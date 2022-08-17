@@ -14,15 +14,15 @@ type timeTracker struct {
 
 func newTimeTracker(timerDuration *time.Duration) *timeTracker {
 	now := time.Now()
-	t := &timeTracker{
+	tt := &timeTracker{
 		lastReset:     &now,
 		timerDuration: timerDuration,
 		timer:         &time.Timer{},
 	}
-	if timerDuration != nil {
-		t.timer = time.NewTimer(*timerDuration)
+	if tt.timerDuration != nil {
+		tt.timer = time.NewTimer(*timerDuration)
 	}
-	return t
+	return tt
 }
 
 func (tt *timeTracker) GetLast() *time.Time {
@@ -41,17 +41,18 @@ func (tt *timeTracker) Reset() {
 	t := time.Now()
 	tt.lastReset = &t
 	if tt.timerDuration != nil {
-		if !tt.timer.Stop() {
-			for {
-				select {
-				case <-tt.timer.C:
-					break
-				default:
-					goto done
-				}
+		// Stop the existing timer and drain
+		// the channel.
+		tt.timer.Stop()
+		for {
+			select {
+			case <-tt.timer.C:
+				continue
+			default:
+				goto done
 			}
-		done:
 		}
+	done:
 		tt.timer.Reset(*tt.timerDuration)
 	}
 }

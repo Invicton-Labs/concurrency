@@ -347,26 +347,25 @@ func getRoutine[
 			if shouldGetInput {
 				// Get the input from the input channel
 				var inputChanClosed bool
-				input, inputChanClosed, forceSendBatch, err = getInput(getInputSettings, inputIndex, &lastInput, settings.outputTimeTracker.TimerChan())
+				input, inputChanClosed, forceSendBatch, err = getInput(getInputSettings, inputIndex, &lastInput, settings.outputTimeTracker)
 				// If there was an error, or the input channel is closed, exit
 				if err != nil || inputChanClosed {
 					return err
 				}
 				// Update the last input timestamp
-				lastInput = time.Now()
+				if !forceSendBatch {
+					lastInput = time.Now()
+				}
 			}
 
 			if !forceSendBatch {
 				switch {
 				case settings.processingFuncWithInputWithOutput != nil:
 					output, err = settings.processingFuncWithInputWithOutput(settings.internalCtx, input, metadata)
-					break
 				case settings.processingFuncWithInputWithoutOutput != nil:
 					err = settings.processingFuncWithInputWithoutOutput(settings.internalCtx, input, metadata)
-					break
 				case settings.processingFuncWithoutInputWithOutput != nil:
 					output, err = settings.processingFuncWithoutInputWithOutput(settings.internalCtx, metadata)
-					break
 				case settings.processingFuncWithoutInputWithoutOutput != nil:
 					err = settings.processingFuncWithoutInputWithoutOutput(settings.internalCtx, metadata)
 				}
