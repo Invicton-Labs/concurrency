@@ -11,10 +11,10 @@ import (
 )
 
 func TestExecutor(t *testing.T) {
-	testMultiConcurrencies(t, "executor", executor)
+	testMultiConcurrenciesMultiInput(t, "executor", testExecutor)
 }
 
-func executor(t *testing.T, numRoutines int, inputCount int) {
+func testExecutor(t *testing.T, numRoutines int, inputCount int) {
 	ctx := context.Background()
 	inputChan := make(chan int, inputCount)
 	for i := 1; i <= inputCount; i++ {
@@ -30,8 +30,8 @@ func executor(t *testing.T, numRoutines int, inputCount int) {
 			atomic.AddInt32(&received, 1)
 			return uint(input), nil
 		},
-		EmptyInputChannelCallback: emptyInput,
-		FullOutputChannelCallback: fullOutput,
+		EmptyInputChannelCallback: testEmptyInputCallback,
+		FullOutputChannelCallback: testFullOutputCallback,
 	})
 	time.Sleep(100 * time.Millisecond)
 	for i := 1; i <= inputCount; i++ {
@@ -39,12 +39,10 @@ func executor(t *testing.T, numRoutines int, inputCount int) {
 	}
 	close(inputChan)
 	if err := executor.Wait(); err != nil {
-		t.Error(err)
-		return
+		t.Fatal(err)
 	}
 	if int(received) != 2*inputCount {
-		t.Errorf("Received %d inputs, but expected %d\n", received, 2*inputCount)
-		return
+		t.Fatalf("Received %d inputs, but expected %d\n", received, 2*inputCount)
 	}
 	maxFound := uint(0)
 	numOutput := 0
@@ -59,21 +57,19 @@ func executor(t *testing.T, numRoutines int, inputCount int) {
 		numOutput++
 	}
 	if maxFound != uint(inputCount) {
-		t.Errorf("Expected max return value of %d, but received %d\n", inputCount, maxFound)
-		return
+		t.Fatalf("Expected max return value of %d, but received %d\n", inputCount, maxFound)
 	}
 	if numOutput != 2*inputCount {
-		t.Errorf("Received %d outputs, but expected %d\n", numOutput, 2*inputCount)
-		return
+		t.Fatalf("Received %d outputs, but expected %d\n", numOutput, 2*inputCount)
 	}
-	verifyCleanup(t, executor)
+	testVerifyCleanup(t, executor)
 }
 
 func TestExecutorUnbatch(t *testing.T) {
-	testMultiConcurrencies(t, "executor-unbatch", executorUnbatch)
+	testMultiConcurrenciesMultiInput(t, "executor-unbatch", testExecutorUnbatch)
 }
 
-func executorUnbatch(t *testing.T, numRoutines int, inputCount int) {
+func testExecutorUnbatch(t *testing.T, numRoutines int, inputCount int) {
 	ctx := context.Background()
 	inputChan := make(chan int, inputCount)
 	for i := 1; i <= inputCount; i++ {
@@ -90,16 +86,14 @@ func executorUnbatch(t *testing.T, numRoutines int, inputCount int) {
 			atomic.AddInt32(&received, 1)
 			return []uint{uint(input), uint(input)}, nil
 		},
-		EmptyInputChannelCallback: emptyInput,
-		FullOutputChannelCallback: fullOutput,
+		EmptyInputChannelCallback: testEmptyInputCallback,
+		FullOutputChannelCallback: testFullOutputCallback,
 	})
 	if err := executor.Wait(); err != nil {
-		t.Error(err)
-		return
+		t.Fatal(err)
 	}
 	if int(received) != inputCount {
-		t.Errorf("Received %d inputs, but expected %d\n", received, 2*inputCount)
-		return
+		t.Fatalf("Received %d inputs, but expected %d\n", received, 2*inputCount)
 	}
 	maxFound := uint(0)
 	numOutput := 0
@@ -114,21 +108,19 @@ func executorUnbatch(t *testing.T, numRoutines int, inputCount int) {
 		numOutput++
 	}
 	if maxFound != uint(inputCount) {
-		t.Errorf("Expected max return value of %d, but received %d\n", inputCount, maxFound)
-		return
+		t.Fatalf("Expected max return value of %d, but received %d\n", inputCount, maxFound)
 	}
 	if numOutput != 2*inputCount {
-		t.Errorf("Received %d outputs, but expected %d\n", numOutput, 2*inputCount)
-		return
+		t.Fatalf("Received %d outputs, but expected %d\n", numOutput, 2*inputCount)
 	}
-	verifyCleanup(t, executor)
+	testVerifyCleanup(t, executor)
 }
 
 func TestExecutorBatchNoTimeout(t *testing.T) {
-	testMultiConcurrencies(t, "executor-batch-no-timeout", executorBatchNoTimeout)
+	testMultiConcurrenciesMultiInput(t, "executor-batch-no-timeout", testExecutorBatchNoTimeout)
 }
 
-func executorBatchNoTimeout(t *testing.T, numRoutines int, inputCount int) {
+func testExecutorBatchNoTimeout(t *testing.T, numRoutines int, inputCount int) {
 	ctx := context.Background()
 	inputChan := make(chan int, inputCount)
 	for i := 1; i <= inputCount; i++ {
@@ -145,12 +137,11 @@ func executorBatchNoTimeout(t *testing.T, numRoutines int, inputCount int) {
 			return uint(input), nil
 		},
 		BatchSize:                 batchSize,
-		EmptyInputChannelCallback: emptyInput,
-		FullOutputChannelCallback: fullOutput,
+		EmptyInputChannelCallback: testEmptyInputCallback,
+		FullOutputChannelCallback: testFullOutputCallback,
 	})
 	if err := executor.Wait(); err != nil {
-		t.Error(err)
-		return
+		t.Fatal(err)
 	}
 	batchCount := 0
 	expectedBatchCount := int(math.Ceil(float64(inputCount)/float64(batchSize)) + 0.1)
@@ -161,30 +152,26 @@ func executorBatchNoTimeout(t *testing.T, numRoutines int, inputCount int) {
 	for v := range executor.OutputChan {
 		batchCount++
 		if batchCount < expectedBatchCount && len(v) != batchSize {
-			t.Errorf("Expected non-final output batch to be full with %d values, but it had %d values", batchSize, len(v))
-			return
+			t.Fatalf("Expected non-final output batch to be full with %d values, but it had %d values", batchSize, len(v))
 		}
 		if batchCount == expectedBatchCount && len(v) != finalBatchSize {
-			t.Errorf("Expected final output batch to have %d values, but it had %d values", finalBatchSize, len(v))
-			return
+			t.Fatalf("Expected final output batch to have %d values, but it had %d values", finalBatchSize, len(v))
 		}
 		if batchCount > expectedBatchCount {
-			t.Errorf("Received more batches than expected (%d)", expectedBatchCount)
-			return
+			t.Fatalf("Received more batches than expected (%d)", expectedBatchCount)
 		}
 	}
 	if batchCount != expectedBatchCount {
-		t.Errorf("Received fewer batches (%d) than expected (%d)", batchCount, expectedBatchCount)
-		return
+		t.Fatalf("Received fewer batches (%d) than expected (%d)", batchCount, expectedBatchCount)
 	}
-	verifyCleanup(t, executor)
+	testVerifyCleanup(t, executor)
 }
 
 func TestExecutorBatchTimeout(t *testing.T) {
-	testMultiConcurrencies(t, "executor-batch-no-timeout", executorBatchTimeout)
+	testMultiConcurrenciesMultiInput(t, "executor-batch-no-timeout", testExecutorBatchTimeout)
 }
 
-func executorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
+func testExecutorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	inputChan := make(chan int, inputCount)
 	for i := 1; i <= inputCount; i++ {
@@ -211,8 +198,8 @@ func executorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 			return uint(input), nil
 		},
 		BatchSize:                 batchSize,
-		EmptyInputChannelCallback: emptyInput,
-		FullOutputChannelCallback: fullOutput,
+		EmptyInputChannelCallback: testEmptyInputCallback,
+		FullOutputChannelCallback: testFullOutputCallback,
 		BatchMaxInterval:          &batchMaxInterval,
 	})
 	batchIdx := 0
@@ -246,13 +233,13 @@ func executorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 	if err := executor.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Expected a context cancelled error, but got %v", err)
 	}
-	verifyCleanup(t, executor)
+	testVerifyCleanup(t, executor)
 }
 
 func TestExecutorFinal(t *testing.T) {
-	testMultiConcurrencies(t, "executor-final", executorFinal)
+	testMultiConcurrenciesMultiInput(t, "executor-final", testExecutorFinal)
 }
-func executorFinal(t *testing.T, numRoutines int, inputCount int) {
+func testExecutorFinal(t *testing.T, numRoutines int, inputCount int) {
 	ctx := context.Background()
 	inputChan := make(chan int, inputCount)
 	for i := 1; i <= inputCount; i++ {
@@ -269,25 +256,23 @@ func executorFinal(t *testing.T, numRoutines int, inputCount int) {
 			atomic.AddInt32(&received, 1)
 			return nil
 		},
-		EmptyInputChannelCallback: emptyInput,
-		FullOutputChannelCallback: fullOutput,
+		EmptyInputChannelCallback: testEmptyInputCallback,
+		FullOutputChannelCallback: testFullOutputCallback,
 	})
 
 	if err := executor.Wait(); err != nil {
-		t.Error(err)
-		return
+		t.Fatal(err)
 	}
 	if int(received) != inputCount {
-		t.Errorf("Received %d inputs, but expected %d\n", received, inputCount)
-		return
+		t.Fatalf("Received %d inputs, but expected %d\n", received, inputCount)
 	}
-	verifyCleanup(t, executor)
+	testVerifyCleanup(t, executor)
 }
 
 func TestExecutorError(t *testing.T) {
-	testMultiConcurrencies(t, "executor-error", executorError)
+	testMultiConcurrenciesMultiInput(t, "executor-error", testExecutorError)
 }
-func executorError(t *testing.T, numRoutines int, inputCount int) {
+func testExecutorError(t *testing.T, numRoutines int, inputCount int) {
 	ctx := context.Background()
 	inputChan := make(chan int, inputCount)
 	for i := 1; i <= inputCount; i++ {
@@ -305,17 +290,15 @@ func executorError(t *testing.T, numRoutines int, inputCount int) {
 			}
 			return uint(input), nil
 		},
-		EmptyInputChannelCallback: emptyInput,
-		FullOutputChannelCallback: fullOutput,
+		EmptyInputChannelCallback: testEmptyInputCallback,
+		FullOutputChannelCallback: testFullOutputCallback,
 	})
 	err := executor.Wait()
 	if err == nil {
-		t.Errorf("Expected an error, received none")
-		return
+		t.Fatalf("Expected an error, received none")
 	}
 	if err.Error() != "test-error" {
-		t.Errorf("Received unexpected error string: %s", err.Error())
-		return
+		t.Fatalf("Received unexpected error string: %s", err.Error())
 	}
-	verifyCleanup(t, executor)
+	testVerifyCleanup(t, executor)
 }

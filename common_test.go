@@ -11,17 +11,17 @@ func init() {
 	DefaultFullOutputChannelCallbackInterval = 1 * time.Second
 }
 
-func emptyInput(input *EmptyInputChannelCallbackInput) error {
+func testEmptyInputCallback(input *EmptyInputChannelCallbackInput) error {
 	fmt.Printf("%s routine %d has received no input after %dms\n", input.ExecutorName, input.RoutineIndex, input.TimeSinceLastInput.Milliseconds())
 	return nil
 }
 
-func fullOutput(input *FullOutputChannelCallbackInput) error {
+func testFullOutputCallback(input *FullOutputChannelCallbackInput) error {
 	fmt.Printf("%s routine %d has not been able to output for %dms\n", input.ExecutorName, input.RoutineIndex, input.TimeSinceLastOutput.Milliseconds())
 	return nil
 }
 
-func verifyCleanup[OutputChanType any](t *testing.T, executor *ExecutorOutput[OutputChanType]) {
+func testVerifyCleanup[OutputChanType any](t *testing.T, executor *ExecutorOutput[OutputChanType]) {
 	// Drain the output channel
 	for len(executor.OutputChan) > 0 {
 		<-executor.OutputChan
@@ -50,7 +50,22 @@ func verifyCleanup[OutputChanType any](t *testing.T, executor *ExecutorOutput[Ou
 	}
 }
 
-func testMultiConcurrencies(t *testing.T, testName string, f func(t *testing.T, numRoutines int, inputCount int)) {
+func testMultiConcurrencies(t *testing.T, testName string, f func(t *testing.T, numRoutines int)) {
+	concurrencies := []int{
+		1,
+		10,
+		100,
+		1000,
+		10000,
+	}
+	for _, numRoutines := range concurrencies {
+		t.Run(testName, func(t *testing.T) {
+			f(t, numRoutines)
+		})
+	}
+}
+
+func testMultiConcurrenciesMultiInput(t *testing.T, testName string, f func(t *testing.T, numRoutines int, inputCount int)) {
 	concurrencies := []int{
 		1,
 		10,

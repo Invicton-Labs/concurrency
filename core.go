@@ -57,7 +57,7 @@ type executorInput[
 	Func ProcessingFuncType
 
 	// REQUIRED FOR TOP-LEVEL EXECUTORS (not for chained executors). The channel that has input values.
-	InputChannel chan InputType
+	InputChannel <-chan InputType
 
 	// OPTIONAL. The size of the output channel that gets created.
 	// Defaults to the twice the Concurrency value. Only applies if
@@ -230,9 +230,6 @@ func new[
 	}
 	if input.upstream != nil && input.InputChannel != nil {
 		panic("input.InputChannel cannot be provided for chained executors")
-	}
-	if input.upstream == nil && input.InputChannel == nil {
-		panic("input.InputChannel cannot be nil for top-level executors")
 	}
 	if outputFunc == nil && input.OutputChannel != nil {
 		panic("input.OutputChannel must be nil if outputFunc is nil")
