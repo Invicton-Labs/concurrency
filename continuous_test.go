@@ -12,7 +12,7 @@ func TestContinuous(t *testing.T) {
 	testMultiConcurrencies(t, "continuous", testContinuous)
 }
 func testContinuous(t *testing.T, numRoutines int) {
-	// This tests the continus loop with multiple executors and
+	// This tests the continuous loop with multiple executors and
 	// no wait period between the loops.
 	{
 		ctx, ctxCancel := context.WithCancel(context.Background())

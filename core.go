@@ -350,21 +350,7 @@ func new[
 		outputType := reflect.TypeOf(outputZero)
 		var outputChanZero OutputChanType
 		outputChanType := reflect.TypeOf(outputChanZero)
-		canElem := false
-		switch outputChanType.Kind() {
-		case reflect.Array:
-			canElem = true
-		case reflect.Chan:
-			canElem = true
-		case reflect.Map:
-			canElem = true
-		case reflect.Pointer:
-			canElem = true
-		case reflect.Slice:
-			canElem = true
-
-		}
-		isBatchOutput = canElem && outputChanType.Elem() == outputType
+		isBatchOutput = outputChanType.Kind() == reflect.Slice && outputChanType.Elem() == outputType
 	}
 
 	batchTimeTracker := newTimeTracker(input.BatchMaxInterval)

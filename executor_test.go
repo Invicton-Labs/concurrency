@@ -10,6 +10,63 @@ import (
 	"time"
 )
 
+func TestExecutorPerformance(t *testing.T) {
+	inputCount := 1000000
+	numRoutines := 1
+
+	processingFunc := func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err error) {
+		return uint(input), nil
+	}
+
+	ctx := context.Background()
+	inputChan := make(chan int, inputCount)
+	for i := 1; i <= inputCount; i++ {
+		inputChan <- i
+	}
+	close(inputChan)
+
+	// startTime := time.Now()
+	// outputChan := make(chan uint, inputCount)
+	// errg := errgroup.Group{}
+	// errg.Go(func() error {
+	// 	for v := range inputChan {
+	// 		r, err := processingFunc(ctx, v, nil)
+	// 		if err != nil {
+	// 			t.Fatal(err)
+	// 		}
+	// 		outputChan <- r
+	// 	}
+	// 	return nil
+	// })
+	// if err := errg.Wait(); err != nil {
+	// 	t.Fatal(err)
+	// }
+	// durationVanilla := time.Since(startTime)
+	// t.Error(durationVanilla.Milliseconds())
+
+	// inputChan = make(chan int, inputCount)
+	// for i := 1; i <= inputCount; i++ {
+	// 	inputChan <- i
+	// }
+	// close(inputChan)
+	startTime := time.Now()
+	executor := Executor(ctx, ExecutorInput[int, uint]{
+		Name:                      "test-executor-performance-1",
+		Concurrency:               numRoutines,
+		OutputChannelSize:         inputCount,
+		InputChannel:              inputChan,
+		Func:                      processingFunc,
+		EmptyInputChannelCallback: testEmptyInputCallback,
+		FullOutputChannelCallback: testFullOutputCallback,
+	})
+	if err := executor.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	durationConcurrency := time.Since(startTime)
+	t.Error(durationConcurrency.Milliseconds())
+	testVerifyCleanup(t, executor)
+}
+
 func TestExecutor(t *testing.T) {
 	testMultiConcurrenciesMultiInput(t, "executor", testExecutor)
 }
