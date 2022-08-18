@@ -6,18 +6,18 @@ import (
 )
 
 type timeTracker struct {
-	lock          sync.Mutex
-	lastReset     *time.Time
+	lock sync.Mutex
+	//lastReset     *time.Time
 	timerDuration *time.Duration
 	timer         *time.Timer
+	threadSafe    bool
 }
 
-func newTimeTracker(timerDuration *time.Duration) *timeTracker {
-	now := time.Now()
+func newTimeTracker(timerDuration *time.Duration, threadSafe bool) *timeTracker {
 	tt := &timeTracker{
-		lastReset:     &now,
 		timerDuration: timerDuration,
 		timer:         &time.Timer{},
+		threadSafe:    threadSafe,
 	}
 	if tt.timerDuration != nil {
 		tt.timer = time.NewTimer(*timerDuration)
@@ -25,31 +25,32 @@ func newTimeTracker(timerDuration *time.Duration) *timeTracker {
 	return tt
 }
 
-func (tt *timeTracker) GetLast() *time.Time {
-	tt.lock.Lock()
-	defer tt.lock.Unlock()
-	if tt.lastReset == nil {
-		t := time.Now()
-		tt.lastReset = &t
-	}
-	return tt.lastReset
-}
-
 func (tt *timeTracker) Reset() {
 	if tt.timerDuration != nil {
-		tt.lock.Lock()
-		defer tt.lock.Unlock()
-		t := time.Now()
-		tt.lastReset = &t
-		// Stop the existing timer
-		tt.timer.Stop()
-		// Drain the channel
-		for {
-			select {
-			case <-tt.timer.C:
-				continue
-			default:
-				goto done
+		if tt.threadSafe {
+			tt.lock.Lock()
+			defer tt.lock.Unlock()
+			// Stop the existing timer
+			if !tt.timer.Stop() {
+				// It was already expired or stopped, which
+				// means there could be a value in the channel.
+				// Drain it in a thread-safe manner.
+				for {
+					select {
+					case <-tt.timer.C:
+						continue
+					default:
+						goto done
+					}
+				}
+			}
+		} else {
+			// If we don't need to handle thread safety,
+			// this is a faster way to do it (select is slow).
+			if !tt.timer.Stop() {
+				for len(tt.timer.C) > 0 {
+					<-tt.timer.C
+				}
 			}
 		}
 	done:

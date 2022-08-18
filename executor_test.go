@@ -8,13 +8,16 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func TestExecutorPerformance(t *testing.T) {
-	inputCount := 1000000
+	inputCount := 10000000
 	numRoutines := 1
 
 	processingFunc := func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err error) {
+		//time.Sleep(1 * time.Millisecond)
 		return uint(input), nil
 	}
 
@@ -25,31 +28,45 @@ func TestExecutorPerformance(t *testing.T) {
 	}
 	close(inputChan)
 
-	// startTime := time.Now()
-	// outputChan := make(chan uint, inputCount)
-	// errg := errgroup.Group{}
-	// errg.Go(func() error {
-	// 	for v := range inputChan {
-	// 		r, err := processingFunc(ctx, v, nil)
-	// 		if err != nil {
-	// 			t.Fatal(err)
-	// 		}
-	// 		outputChan <- r
-	// 	}
-	// 	return nil
-	// })
-	// if err := errg.Wait(); err != nil {
-	// 	t.Fatal(err)
-	// }
-	// durationVanilla := time.Since(startTime)
-	// t.Error(durationVanilla.Milliseconds())
+	startTimeVanilla := time.Now()
+	outputChan := make(chan uint, inputCount)
+	errg := errgroup.Group{}
+	errg.Go(func() error {
+		for {
+			select {
+			case <-ctx.Done():
+				goto done
+			case v, open := <-inputChan:
+				if !open {
+					goto done
+				}
+				r, err := processingFunc(ctx, v, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				select {
 
-	// inputChan = make(chan int, inputCount)
-	// for i := 1; i <= inputCount; i++ {
-	// 	inputChan <- i
-	// }
-	// close(inputChan)
-	startTime := time.Now()
+				case <-ctx.Done():
+					goto done
+				case outputChan <- r:
+				}
+			}
+		}
+	done:
+		return nil
+	})
+	if err := errg.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	durationVanilla := time.Since(startTimeVanilla)
+	t.Error(durationVanilla.Milliseconds())
+
+	inputChan = make(chan int, inputCount)
+	for i := 1; i <= inputCount; i++ {
+		inputChan <- i
+	}
+	close(inputChan)
+	startTimeConcurrency := time.Now()
 	executor := Executor(ctx, ExecutorInput[int, uint]{
 		Name:                      "test-executor-performance-1",
 		Concurrency:               numRoutines,
@@ -62,7 +79,7 @@ func TestExecutorPerformance(t *testing.T) {
 	if err := executor.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	durationConcurrency := time.Since(startTime)
+	durationConcurrency := time.Since(startTimeConcurrency)
 	t.Error(durationConcurrency.Milliseconds())
 	testVerifyCleanup(t, executor)
 }
@@ -239,11 +256,10 @@ func testExecutorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 	batchSize := 4000
 	fullBatches := 2
 	executor := ExecutorBatch(ctx, ExecutorBatchInput[int, uint]{
-		Name:                           "test-executor-batch-timeout-1",
-		Concurrency:                    numRoutines,
-		OutputChannelSize:              inputCount * 2,
-		InputChannel:                   inputChan,
-		IncludeMetadataInFunctionCalls: true,
+		Name:              "test-executor-batch-timeout-1",
+		Concurrency:       numRoutines,
+		OutputChannelSize: inputCount * 2,
+		InputChannel:      inputChan,
 		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (uint, error) {
 			if metadata.InputIndex > uint64(fullBatches*batchSize) && metadata.InputIndex%1000 == 0 {
 				select {

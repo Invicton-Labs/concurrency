@@ -27,6 +27,7 @@ func saveOutput[OutputChanType any](
 	value OutputChanType,
 	inputIndex uint64,
 	lastOutput *time.Time,
+	callbackTracker *timeTracker,
 	forceSendBatch bool,
 ) (
 	err error,
@@ -35,17 +36,15 @@ func saveOutput[OutputChanType any](
 		panic("Unexpected use of forceSendBatch")
 	}
 
-	select {
 	// If the internal context is done, that means that
 	// a routine in this executor or downstream has failed,
 	// so we always exit on that. We check this first so
 	// that it has the highest priority.
-	case <-settings.internalCtx.Done():
+	if settings.internalCtx.Err() != nil {
 		return settings.ctxCancelledFunc(inputIndex)
-
-	// The internal context is not done, so now wait for
-	// the first thing to act on.
-	default:
+	} else {
+		// The internal context is not done, so now wait for
+		// the first thing to act on.
 
 		// If we're supposed to ignore zero value outputs and the output is a
 		// zero value, return without doing anything.
@@ -56,12 +55,10 @@ func saveOutput[OutputChanType any](
 		// Get the index of this output insert attempt
 		outputIndex := atomic.AddUint64(settings.outputIndexCounter, 1) - 1
 
-		callbackTimer := &time.Timer{}
-		if settings.fullOutputChannelCallback != nil {
-			callbackTimer = time.NewTimer(settings.fullOutputChannelCallbackInterval)
-		}
-
 		for {
+
+			// Reset the callback timer, if there is one
+			callbackTracker.Reset()
 
 			select {
 
@@ -82,7 +79,7 @@ func saveOutput[OutputChanType any](
 			// This will trigger if the output channel is full for a specified
 			// amount of time AND an FullOutputChannelCallback is provided. Otherwise,
 			// it will never return.
-			case <-callbackTimer.C:
+			case <-callbackTracker.TimerChan():
 				if err := settings.fullOutputChannelCallback(&FullOutputChannelCallbackInput{
 					RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
 					TimeSinceLastOutput:     time.Since(*lastOutput),
@@ -91,14 +88,6 @@ func saveOutput[OutputChanType any](
 					return err
 				}
 			}
-
-			// Reset the callback timer
-			if !callbackTimer.Stop() {
-				for len(callbackTimer.C) > 0 {
-					<-callbackTimer.C
-				}
-			}
-			callbackTimer.Reset(settings.fullOutputChannelCallbackInterval)
 		}
 	}
 }
@@ -108,6 +97,7 @@ func saveOutputUnbatch[OutputType any](
 	values []OutputType,
 	inputIndex uint64,
 	lastOutput *time.Time,
+	callbackTracker *timeTracker,
 	forceSendBatch bool,
 ) (
 	err error,
@@ -118,7 +108,7 @@ func saveOutputUnbatch[OutputType any](
 	// Loop through each value in the result batch
 	for _, value := range values {
 		// Insert the value into the output channel
-		err = saveOutput(settings, value, inputIndex, lastOutput, false)
+		err = saveOutput(settings, value, inputIndex, lastOutput, callbackTracker, false)
 		// Check if the result was a cancelled context or an error
 		if err != nil {
 			// If so, return right away
@@ -133,6 +123,7 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 	value OutputType,
 	inputIndex uint64,
 	lastOutput *time.Time,
+	callbackTracker *timeTracker,
 	forceSendBatch bool,
 ) (
 	err error,
@@ -146,6 +137,7 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 		value OutputType,
 		inputIndex uint64,
 		lastOutput *time.Time,
+		callbackTracker *timeTracker,
 		forceSendBatch bool,
 	) (
 		err error,
@@ -165,12 +157,12 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 			// Save the output
 			if batchIdx == batchSize-1 {
 				// If it's a complete batch, send the entire slice
-				err = saveOutput(settings, batch, inputIndex, lastOutput, false)
+				err = saveOutput(settings, batch, inputIndex, lastOutput, callbackTracker, false)
 			} else {
 				// If it's an incomplete batch, send a subslice since the slice
 				// was pre-allocated and filled with zero-values (which we don't
 				// want to send downstream)
-				err = saveOutput(settings, batch[0:batchIdx], inputIndex, lastOutput, false)
+				err = saveOutput(settings, batch[0:batchIdx], inputIndex, lastOutput, callbackTracker, false)
 			}
 
 			// Clear the batch

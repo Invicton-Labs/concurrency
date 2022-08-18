@@ -79,11 +79,6 @@ type executorInput[
 	// top-level executor in a chain.
 	ProcessUpstreamOutputsAfterUpstreamError bool
 
-	// OPTIONAL. Whether to include a struct of metadata as an argument to the function
-	// calls. This can be useful when coordinating shared resources between routines or
-	// for debugging, but may impact high-performance applications.
-	IncludeMetadataInFunctionCalls bool
-
 	// OPTIONAL. How long to wait for an input before calling the empty input callback
 	// function, IF one has been provided. Defaults to the
 	// DefaultEmptyInputChannelCallbackInterval value.
@@ -210,6 +205,7 @@ func new[
 		value OutputType,
 		inputIndex uint64,
 		lastOutput *time.Time,
+		callbackTracker *timeTracker,
 		forceSendBatch bool,
 	) (
 		err error,
@@ -353,7 +349,7 @@ func new[
 		isBatchOutput = outputChanType.Kind() == reflect.Slice && outputChanType.Elem() == outputType
 	}
 
-	batchTimeTracker := newTimeTracker(input.BatchMaxInterval)
+	batchTimeTracker := newTimeTracker(input.BatchMaxInterval, true)
 
 	routineSettings := &routineSettings[InputType, OutputType, OutputChanType, ProcessingFuncType]{
 		executorInput:                     &input,

@@ -28,6 +28,7 @@ func getInput[
 	settings *getInputSettings[InputType, OutputType, OutputChanType, ProcessingFuncType],
 	inputIndex uint64,
 	lastInputTime *time.Time,
+	callbackTimer *timeTracker,
 	batchTimer *timeTracker,
 ) (
 	input InputType,
@@ -38,17 +39,15 @@ func getInput[
 
 	inputReceived := false
 
-	select {
 	// If the internal context is done, that means that
 	// a routine in this executor or downstream has failed,
 	// so we always exit on that. We check this first so
 	// that it has the highest priority.
-	case <-settings.internalCtx.Done():
+	if settings.internalCtx.Err() != nil {
 		return input, false, false, settings.ctxCancelledFunc(inputIndex)
-
-	// The internal context is not done, so now wait for
-	// the first thing to act on.
-	default:
+	} else {
+		// The internal context is not done, so now wait for
+		// the first thing to act on.
 
 		select {
 		// This will trigger if there's a batch timer and it's ready
@@ -57,15 +56,11 @@ func getInput[
 
 		default:
 
-			// A timer for calling the full output callback on the desired interval,
-			// if a callback was provided.
-			var callbackTimer *time.Timer = &time.Timer{}
-			if settings.executorInput.EmptyInputChannelCallback != nil {
-				callbackTimer = time.NewTimer(settings.emptyInputChannelCallbackInterval)
-			}
-
 			// We need a loop because a timeout will need to retry after running the callback.
 			for {
+
+				// Reset the callback timer, if there is one
+				callbackTimer.Reset()
 
 				select {
 				// Check if the internal executor context is done
@@ -95,23 +90,13 @@ func getInput[
 				// This will trigger if the output channel is full for a specified
 				// amount of time AND an FullOutputChannelCallback is provided. Otherwise,
 				// it will never return.
-				case <-callbackTimer.C:
+				case <-callbackTimer.TimerChan():
 					if err := settings.executorInput.EmptyInputChannelCallback(&EmptyInputChannelCallbackInput{
 						RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
 						TimeSinceLastInput:      time.Since(*lastInputTime),
 					}); err != nil {
 						return input, false, false, err
 					}
-				}
-
-				// Reset the timer, if there is one
-				if callbackTimer != nil {
-					if !callbackTimer.Stop() {
-						for len(callbackTimer.C) > 0 {
-							<-callbackTimer.C
-						}
-					}
-					callbackTimer.Reset(settings.emptyInputChannelCallbackInterval)
 				}
 			}
 		}
