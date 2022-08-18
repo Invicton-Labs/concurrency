@@ -209,6 +209,7 @@ func new[
 		input *saveOutputSettings[OutputChanType],
 		value OutputType,
 		inputIndex uint64,
+		lastOutput *time.Time,
 		forceSendBatch bool,
 	) (
 		err error,
@@ -318,8 +319,6 @@ func new[
 		routineStatusTrackersMap[v.executorName] = v
 	}
 
-	outputTimeTracker := newTimeTracker(input.BatchMaxInterval)
-
 	// A counter for the number of inputs that have been taken from
 	// the input channel.
 	var inputIndex uint64 = 0
@@ -368,6 +367,8 @@ func new[
 		isBatchOutput = canElem && outputChanType.Elem() == outputType
 	}
 
+	batchTimeTracker := newTimeTracker(input.BatchMaxInterval)
+
 	routineSettings := &routineSettings[InputType, OutputType, OutputChanType, ProcessingFuncType]{
 		executorInput:                     &input,
 		internalCtx:                       internalCtx,
@@ -383,7 +384,7 @@ func new[
 		inputChan:                         inputChan,
 		outputChan:                        outputChan,
 		outputFunc:                        outputFunc,
-		outputTimeTracker:                 outputTimeTracker,
+		batchTimeTracker:                  batchTimeTracker,
 		isBatchOutput:                     isBatchOutput,
 		forceWaitForInput:                 forceWaitForInput,
 		exitFunc: getRoutineExit(

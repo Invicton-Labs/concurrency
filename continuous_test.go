@@ -9,7 +9,7 @@ import (
 )
 
 func TestContinuous(t *testing.T) {
-	testMultiConcurrencies(t, "executor-final", testContinuous)
+	testMultiConcurrencies(t, "continuous", testContinuous)
 }
 func testContinuous(t *testing.T, numRoutines int) {
 	// This tests the continus loop with multiple executors and

@@ -36,14 +36,14 @@ func (tt *timeTracker) GetLast() *time.Time {
 }
 
 func (tt *timeTracker) Reset() {
-	tt.lock.Lock()
-	defer tt.lock.Unlock()
-	t := time.Now()
-	tt.lastReset = &t
 	if tt.timerDuration != nil {
-		// Stop the existing timer and drain
-		// the channel.
+		tt.lock.Lock()
+		defer tt.lock.Unlock()
+		t := time.Now()
+		tt.lastReset = &t
+		// Stop the existing timer
 		tt.timer.Stop()
+		// Drain the channel
 		for {
 			select {
 			case <-tt.timer.C:

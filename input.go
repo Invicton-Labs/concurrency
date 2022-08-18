@@ -84,6 +84,8 @@ func getInput[
 						}
 						return input, true, false, nil
 					}
+					// Update the last input timestamp
+					*lastInputTime = time.Now()
 					return input, false, false, nil
 
 				// This will trigger if there's a batch timer and it's ready

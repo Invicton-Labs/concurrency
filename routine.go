@@ -30,10 +30,10 @@ func getRoutineExit[
 	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ](
 	settings *routineExitSettings[InputType, OutputType, OutputChanType, ProcessingFuncType],
-) func(err error, routineIdx uint, cleanupFunc func() error) error {
+) func(err error, routineIdx uint, cleanupFunc func(lastOutput *time.Time) error, lastOutput *time.Time) error {
 	var errLock sync.Mutex
 	var exitErr error
-	return func(err error, routineIdx uint, cleanupFunc func() error) error {
+	return func(err error, routineIdx uint, cleanupFunc func(lastOutput *time.Time) error, lastOutput *time.Time) error {
 
 		isLastRoutine := false
 
@@ -153,7 +153,7 @@ func getRoutineExit[
 
 					// If we're batching outputs, push the final batch
 					if cleanupFunc != nil {
-						err = cleanupFunc()
+						err = cleanupFunc(lastOutput)
 						if err != nil {
 							// Run the callback for the executor's failure
 							if settings.executorInput.ExecutorErrorCallback != nil {
@@ -221,7 +221,7 @@ type routineSettings[
 	outputIndexCounter                      *uint64
 	fullOutputChannelCallbackInterval       time.Duration
 	emptyInputChannelCallbackInterval       time.Duration
-	outputTimeTracker                       *timeTracker
+	batchTimeTracker                        *timeTracker
 	processingFuncWithInputWithOutput       ProcessingFuncWithInputWithOutput[InputType, OutputType]
 	processingFuncWithInputWithoutOutput    ProcessingFuncWithInputWithoutOutput[InputType]
 	processingFuncWithoutInputWithOutput    ProcessingFuncWithoutInputWithOutput[OutputType]
@@ -234,11 +234,12 @@ type routineSettings[
 		settings *saveOutputSettings[OutputChanType],
 		value OutputType,
 		inputIndex uint64,
+		lastOutput *time.Time,
 		forceSendBatch bool,
 	) (
 		err error,
 	)
-	exitFunc func(err error, routineIdx uint, cleanupFunc func() error) error
+	exitFunc func(err error, routineIdx uint, cleanupFunc func(lastOutput *time.Time) error, lastOutput *time.Time) error
 }
 
 func getRoutine[
@@ -298,18 +299,22 @@ func getRoutine[
 		outputChan:                        settings.outputChan,
 		outputIndexCounter:                settings.outputIndexCounter,
 		getRoutineFunctionMetadata:        getRoutineFunctionMetadata,
-		outputTimeTracker:                 settings.outputTimeTracker,
+		batchTimeTracker:                  settings.batchTimeTracker,
 	}
 
-	var cleanupFunc func() error
+	var cleanupFunc func(lastOutput *time.Time) error
 	if settings.isBatchOutput {
-		cleanupFunc = func() error {
+		cleanupFunc = func(lastOutput *time.Time) error {
 			var output OutputType
-			return settings.outputFunc(saveOutputSettings, output, atomic.LoadUint64(settings.inputIndexCounter), true)
+			return settings.outputFunc(saveOutputSettings, output, atomic.LoadUint64(settings.inputIndexCounter), lastOutput, true)
 		}
 	}
 
 	return func() (err error) {
+
+		// This tracks the times of the last successful input pull
+		lastInput := time.Now()
+		lastOutput := time.Now()
 
 		defer func() {
 			// Convert panics into errors
@@ -320,11 +325,8 @@ func getRoutine[
 					err = fmt.Errorf("%v", r)
 				}
 			}
-			err = settings.exitFunc(err, routineIdx, cleanupFunc)
+			err = settings.exitFunc(err, routineIdx, cleanupFunc, &lastOutput)
 		}()
-
-		// This tracks the times of the last successful input pull
-		lastInput := time.Now()
 
 		var metadata *RoutineFunctionMetadata
 
@@ -347,14 +349,10 @@ func getRoutine[
 			if shouldGetInput {
 				// Get the input from the input channel
 				var inputChanClosed bool
-				input, inputChanClosed, forceSendBatch, err = getInput(getInputSettings, inputIndex, &lastInput, settings.outputTimeTracker)
+				input, inputChanClosed, forceSendBatch, err = getInput(getInputSettings, inputIndex, &lastInput, settings.batchTimeTracker)
 				// If there was an error, or the input channel is closed, exit
 				if err != nil || inputChanClosed {
 					return err
-				}
-				// Update the last input timestamp
-				if !forceSendBatch {
-					lastInput = time.Now()
 				}
 			}
 
@@ -400,7 +398,7 @@ func getRoutine[
 				// only output the existing batch and will not actually add a value to the batch.
 				// Otherwise, it sends the output either into the batch or directly into the
 				// output channel, depending on whether batching is being used.
-				err := settings.outputFunc(saveOutputSettings, output, inputIndex, forceSendBatch)
+				err := settings.outputFunc(saveOutputSettings, output, inputIndex, &lastOutput, forceSendBatch)
 				if err != nil {
 					return err
 				}

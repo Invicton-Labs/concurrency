@@ -19,13 +19,14 @@ type saveOutputSettings[
 	outputChan                        chan<- OutputChanType
 	outputIndexCounter                *uint64
 	getRoutineFunctionMetadata        func(inputIndex uint64) *RoutineFunctionMetadata
-	outputTimeTracker                 *timeTracker
+	batchTimeTracker                  *timeTracker
 }
 
 func saveOutput[OutputChanType any](
 	settings *saveOutputSettings[OutputChanType],
 	value OutputChanType,
 	inputIndex uint64,
+	lastOutput *time.Time,
 	forceSendBatch bool,
 ) (
 	err error,
@@ -72,7 +73,10 @@ func saveOutput[OutputChanType any](
 			case settings.outputChan <- value:
 				// The insert into the output channel succeeded
 				// Update the last output timestamp
-				settings.outputTimeTracker.Reset()
+				*lastOutput = time.Now()
+
+				// If there's a batch output tracker, update it
+				settings.batchTimeTracker.Reset()
 				return nil
 
 			// This will trigger if the output channel is full for a specified
@@ -81,7 +85,7 @@ func saveOutput[OutputChanType any](
 			case <-callbackTimer.C:
 				if err := settings.fullOutputChannelCallback(&FullOutputChannelCallbackInput{
 					RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
-					TimeSinceLastOutput:     time.Since(*(settings.outputTimeTracker.GetLast())),
+					TimeSinceLastOutput:     time.Since(*lastOutput),
 					OutputIndex:             outputIndex,
 				}); err != nil {
 					return err
@@ -103,6 +107,7 @@ func saveOutputUnbatch[OutputType any](
 	settings *saveOutputSettings[OutputType],
 	values []OutputType,
 	inputIndex uint64,
+	lastOutput *time.Time,
 	forceSendBatch bool,
 ) (
 	err error,
@@ -113,7 +118,7 @@ func saveOutputUnbatch[OutputType any](
 	// Loop through each value in the result batch
 	for _, value := range values {
 		// Insert the value into the output channel
-		err = saveOutput(settings, value, inputIndex, false)
+		err = saveOutput(settings, value, inputIndex, lastOutput, false)
 		// Check if the result was a cancelled context or an error
 		if err != nil {
 			// If so, return right away
@@ -127,6 +132,7 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 	settings *saveOutputSettings[[]OutputType],
 	value OutputType,
 	inputIndex uint64,
+	lastOutput *time.Time,
 	forceSendBatch bool,
 ) (
 	err error,
@@ -139,6 +145,7 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 		settings *saveOutputSettings[[]OutputType],
 		value OutputType,
 		inputIndex uint64,
+		lastOutput *time.Time,
 		forceSendBatch bool,
 	) (
 		err error,
@@ -158,12 +165,12 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 			// Save the output
 			if batchIdx == batchSize-1 {
 				// If it's a complete batch, send the entire slice
-				err = saveOutput(settings, batch, inputIndex, false)
+				err = saveOutput(settings, batch, inputIndex, lastOutput, false)
 			} else {
 				// If it's an incomplete batch, send a subslice since the slice
 				// was pre-allocated and filled with zero-values (which we don't
 				// want to send downstream)
-				err = saveOutput(settings, batch[0:batchIdx], inputIndex, false)
+				err = saveOutput(settings, batch[0:batchIdx], inputIndex, lastOutput, false)
 			}
 
 			// Clear the batch
@@ -174,7 +181,7 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 		} else if forceSendBatch {
 			// If it's a force batch send, but we didn't actually
 			// send a batch, reset the output timer anyways
-			settings.outputTimeTracker.Reset()
+			settings.batchTimeTracker.Reset()
 		}
 
 		return nil
