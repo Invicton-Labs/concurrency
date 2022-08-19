@@ -59,6 +59,7 @@ func TestExecutorPerformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	durationVanilla := time.Since(startTimeVanilla)
+	t.Logf("Vanilla duration: %dms", durationVanilla.Milliseconds())
 	t.Error(durationVanilla.Milliseconds())
 
 	inputChan = make(chan int, inputCount)
@@ -80,7 +81,7 @@ func TestExecutorPerformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	durationConcurrency := time.Since(startTimeConcurrency)
-	t.Error(durationConcurrency.Milliseconds())
+	t.Logf("Concurrency duration: %dms", durationConcurrency.Milliseconds())
 	testVerifyCleanup(t, executor)
 }
 
@@ -273,7 +274,7 @@ func testExecutorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 		BatchSize:                 batchSize,
 		EmptyInputChannelCallback: testEmptyInputCallback,
 		FullOutputChannelCallback: testFullOutputCallback,
-		BatchMaxInterval:          &batchMaxInterval,
+		BatchMaxPeriod:            batchMaxInterval,
 	})
 	batchIdx := 0
 	totalOutputs := 0

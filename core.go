@@ -124,9 +124,9 @@ type executorInput[
 	BatchSize int
 
 	// OPTIONAL. The maximum amount of time to hold a batch before outputting it, even if it's
-	// not full. If not provided, it will always wait for a full batch before outputting
+	// not full. If 0, it will always wait for a full batch before outputting
 	// it. Only used for executors that batch outputs.
-	BatchMaxInterval *time.Duration
+	BatchMaxPeriod time.Duration
 
 	// Internal use only. Output from the upstream executor.
 	upstream *ExecutorOutput[InputType]
@@ -210,7 +210,7 @@ func new[
 	) (
 		err error,
 	),
-	batchMaxInterval *time.Duration,
+	batchMaxInterval time.Duration,
 	forceWaitForInput bool,
 ) *ExecutorOutput[OutputChanType] {
 	if ctx == nil {
@@ -349,7 +349,7 @@ func new[
 		isBatchOutput = outputChanType.Kind() == reflect.Slice && outputChanType.Elem() == outputType
 	}
 
-	batchTimeTracker := newTimeTracker(input.BatchMaxInterval, true)
+	batchTimeTracker := newTimeTracker(input.BatchMaxPeriod, true)
 
 	routineSettings := &routineSettings[InputType, OutputType, OutputChanType, ProcessingFuncType]{
 		executorInput:                     &input,

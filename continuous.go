@@ -36,7 +36,7 @@ func Continuous[OutputType any](
 	}
 	forceWaitForInput, inputChannel := getContinuousInputChannel(input.Concurrency, period)
 	input.InputChannel = inputChannel
-	return new(ctx, (executorInput[time.Time, OutputType, OutputType, ProcessingFuncWithoutInputWithOutput[OutputType]])(input), saveOutput[OutputType], nil, forceWaitForInput)
+	return new(ctx, (executorInput[time.Time, OutputType, OutputType, ProcessingFuncWithoutInputWithOutput[OutputType]])(input), saveOutput[OutputType], 0, forceWaitForInput)
 }
 
 type ContinuousBatchInput[OutputType any] executorInput[time.Time, OutputType, []OutputType, ProcessingFuncWithoutInputWithOutput[OutputType]]
@@ -54,7 +54,7 @@ func ContinuousBatch[OutputType any](
 	}
 	forceWaitForInput, inputChannel := getContinuousInputChannel(input.Concurrency, period)
 	input.InputChannel = inputChannel
-	return new(ctx, (executorInput[time.Time, OutputType, []OutputType, ProcessingFuncWithoutInputWithOutput[OutputType]])(input), getSaveOutputBatchFunc[OutputType](input.BatchSize), input.BatchMaxInterval, forceWaitForInput)
+	return new(ctx, (executorInput[time.Time, OutputType, []OutputType, ProcessingFuncWithoutInputWithOutput[OutputType]])(input), getSaveOutputBatchFunc[OutputType](input.BatchSize), input.BatchMaxPeriod, forceWaitForInput)
 }
 
 type ContinuousUnbatchInput[OutputChanType any] executorInput[time.Time, []OutputChanType, OutputChanType, ProcessingFuncWithoutInputWithOutput[[]OutputChanType]]
@@ -69,7 +69,7 @@ func ContinuousUnbatch[OutputChanType any](
 	}
 	forceWaitForInput, inputChannel := getContinuousInputChannel(input.Concurrency, period)
 	input.InputChannel = inputChannel
-	return new(ctx, (executorInput[time.Time, []OutputChanType, OutputChanType, ProcessingFuncWithoutInputWithOutput[[]OutputChanType]])(input), saveOutputUnbatch[OutputChanType], nil, forceWaitForInput)
+	return new(ctx, (executorInput[time.Time, []OutputChanType, OutputChanType, ProcessingFuncWithoutInputWithOutput[[]OutputChanType]])(input), saveOutputUnbatch[OutputChanType], 0, forceWaitForInput)
 }
 
 type ContinuousFinalInput executorInput[time.Time, any, any, ProcessingFuncWithoutInputWithoutOutput]
@@ -84,5 +84,5 @@ func ContinuousFinal(
 	}
 	forceWaitForInput, inputChannel := getContinuousInputChannel(input.Concurrency, period)
 	input.InputChannel = inputChannel
-	return new(ctx, (executorInput[time.Time, any, any, ProcessingFuncWithoutInputWithoutOutput])(input), nil, nil, forceWaitForInput)
+	return new(ctx, (executorInput[time.Time, any, any, ProcessingFuncWithoutInputWithoutOutput])(input), nil, 0, forceWaitForInput)
 }

@@ -8,25 +8,25 @@ import (
 type timeTracker struct {
 	lock sync.Mutex
 	//lastReset     *time.Time
-	timerDuration *time.Duration
+	timerDuration time.Duration
 	timer         *time.Timer
 	threadSafe    bool
 }
 
-func newTimeTracker(timerDuration *time.Duration, threadSafe bool) *timeTracker {
+func newTimeTracker(timerDuration time.Duration, threadSafe bool) *timeTracker {
 	tt := &timeTracker{
 		timerDuration: timerDuration,
 		timer:         &time.Timer{},
 		threadSafe:    threadSafe,
 	}
-	if tt.timerDuration != nil {
-		tt.timer = time.NewTimer(*timerDuration)
+	if tt.timerDuration != 0 {
+		tt.timer = time.NewTimer(timerDuration)
 	}
 	return tt
 }
 
 func (tt *timeTracker) Reset() {
-	if tt.timerDuration != nil {
+	if tt.timerDuration != 0 {
 		if tt.threadSafe {
 			tt.lock.Lock()
 			defer tt.lock.Unlock()
@@ -54,7 +54,7 @@ func (tt *timeTracker) Reset() {
 			}
 		}
 	done:
-		tt.timer.Reset(*tt.timerDuration)
+		tt.timer.Reset(tt.timerDuration)
 	}
 }
 

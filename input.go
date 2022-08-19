@@ -49,54 +49,51 @@ func getInput[
 		// The internal context is not done, so now wait for
 		// the first thing to act on.
 
-		select {
-		// This will trigger if there's a batch timer and it's ready
-		case <-batchTimer.TimerChan():
-			return input, false, true, nil
+		// Always check the batch timer first, if there is
+		// a batch timer.
+		if batchTimer.TimerChan() != nil {
+			select {
+			case <-batchTimer.TimerChan():
+				return input, false, true, nil
+			default:
+			}
+		}
 
-		default:
+		// We need a loop because a timeout will need to retry after running the callback.
+		for {
 
-			// We need a loop because a timeout will need to retry after running the callback.
-			for {
+			// Reset the callback timer, if there is one
+			callbackTimer.Reset()
 
-				// Reset the callback timer, if there is one
-				callbackTimer.Reset()
+			select {
+			// Check if the internal executor context is done
+			case <-settings.internalCtx.Done():
+				// If so, exit
+				return input, false, false, settings.ctxCancelledFunc(inputIndex)
 
-				select {
-				// Check if the internal executor context is done
-				case <-settings.internalCtx.Done():
-					// If so, exit
-					return input, false, false, settings.ctxCancelledFunc(inputIndex)
+			// Try to get an input from the input channel
+			case input, inputReceived = <-settings.inputChan:
+				// If the channel is closed, exit out of the routine
+				if !inputReceived {
+					return input, true, false, nil
+				}
+				// Update the last input timestamp
+				*lastInputTime = time.Now()
+				return input, false, false, nil
 
-				// Try to get an input from the input channel
-				case input, inputReceived = <-settings.inputChan:
-					// If the channel is closed, exit out of the routine
-					if !inputReceived {
-						if settings.executorInput.RoutineSuccessCallback != nil {
-							return input, true, false, settings.executorInput.RoutineSuccessCallback(&RoutineSuccessCallbackInput{
-								RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
-							})
-						}
-						return input, true, false, nil
-					}
-					// Update the last input timestamp
-					*lastInputTime = time.Now()
-					return input, false, false, nil
+			// This will trigger if there's a batch timer and it's ready
+			case <-batchTimer.TimerChan():
+				return input, false, true, nil
 
-				// This will trigger if there's a batch timer and it's ready
-				case <-batchTimer.TimerChan():
-					return input, false, true, nil
-
-				// This will trigger if the output channel is full for a specified
-				// amount of time AND an FullOutputChannelCallback is provided. Otherwise,
-				// it will never return.
-				case <-callbackTimer.TimerChan():
-					if err := settings.executorInput.EmptyInputChannelCallback(&EmptyInputChannelCallbackInput{
-						RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
-						TimeSinceLastInput:      time.Since(*lastInputTime),
-					}); err != nil {
-						return input, false, false, err
-					}
+			// This will trigger if the output channel is full for a specified
+			// amount of time AND an FullOutputChannelCallback is provided. Otherwise,
+			// it will never return.
+			case <-callbackTimer.TimerChan():
+				if err := settings.executorInput.EmptyInputChannelCallback(&EmptyInputChannelCallbackInput{
+					RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
+					TimeSinceLastInput:      time.Since(*lastInputTime),
+				}); err != nil {
+					return input, false, false, err
 				}
 			}
 		}

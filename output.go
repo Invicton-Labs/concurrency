@@ -155,7 +155,7 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 		// If we're force-sending a batch, or the batch is full, output it
 		if (forceSendBatch && batchIdx > 0) || batchIdx == batchSize {
 			// Save the output
-			if batchIdx == batchSize-1 {
+			if batchIdx == batchSize {
 				// If it's a complete batch, send the entire slice
 				err = saveOutput(settings, batch, inputIndex, lastOutput, callbackTracker, false)
 			} else {

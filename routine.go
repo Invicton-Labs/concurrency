@@ -317,14 +317,14 @@ func getRoutine[
 		lastInput := time.Now()
 		lastOutput := time.Now()
 
-		inputCallbackTracker := newTimeTracker(nil, false)
+		inputCallbackTracker := newTimeTracker(0, false)
 		if settings.executorInput.EmptyInputChannelCallback != nil {
-			inputCallbackTracker = newTimeTracker(&settings.emptyInputChannelCallbackInterval, false)
+			inputCallbackTracker = newTimeTracker(settings.emptyInputChannelCallbackInterval, false)
 		}
 
-		outputCallbackTracker := newTimeTracker(nil, false)
+		outputCallbackTracker := newTimeTracker(0, false)
 		if settings.executorInput.FullOutputChannelCallback != nil {
-			outputCallbackTracker = newTimeTracker(&settings.fullOutputChannelCallbackInterval, false)
+			outputCallbackTracker = newTimeTracker(settings.fullOutputChannelCallbackInterval, false)
 		}
 
 		defer func() {
@@ -361,8 +361,34 @@ func getRoutine[
 				var inputChanClosed bool
 				input, inputChanClosed, forceSendBatch, err = getInput(getInputSettings, inputIndex, &lastInput, inputCallbackTracker, settings.batchTimeTracker)
 				// If there was an error, or the input channel is closed, exit
-				if err != nil || inputChanClosed {
+				if err != nil {
 					return err
+				}
+				if inputChanClosed {
+					// If the input channel is closed, there's nothing left to do,
+					// so we call that a success for this routine.
+					if settings.executorInput.RoutineSuccessCallback != nil {
+						return settings.executorInput.RoutineSuccessCallback(&RoutineSuccessCallbackInput{
+							RoutineFunctionMetadata: metadata,
+						})
+					}
+					return err
+				}
+			} else {
+				// Since we didn't use the getInput function, we haven't checked for
+				// the context being done or whether we should force-send a batch.
+				// So, check that now.
+				if err := settings.internalCtx.Err(); err != nil {
+					return err
+				}
+
+				if settings.batchTimeTracker.TimerChan() != nil {
+					select {
+					// This will trigger if there's a batch timer and it's ready
+					case <-settings.batchTimeTracker.TimerChan():
+						forceSendBatch = true
+					default:
+					}
 				}
 			}
 
