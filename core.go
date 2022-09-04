@@ -56,7 +56,8 @@ type executorInput[
 	// REQUIRED. The function that processes an input into an output.
 	Func ProcessingFuncType
 
-	// REQUIRED FOR TOP-LEVEL EXECUTORS (not for chained executors). The channel that has input values.
+	// REQUIRED FOR TOP-LEVEL EXECUTORS (not for chained executors), with the
+	// exception of Continuous. The channel that has input values.
 	InputChannel <-chan InputType
 
 	// OPTIONAL. The size of the output channel that gets created.
