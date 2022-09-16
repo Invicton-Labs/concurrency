@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -331,9 +332,9 @@ func getRoutine[
 			// Convert panics into errors
 			if r := recover(); r != nil {
 				if perr, ok := r.(error); ok {
-					err = perr
+					err = fmt.Errorf("%s: %s", perr.Error(), string(debug.Stack()))
 				} else {
-					err = fmt.Errorf("%v", r)
+					err = fmt.Errorf("%v: %s", r, string(debug.Stack()))
 				}
 			}
 			err = settings.exitFunc(err, routineIdx, cleanupFunc, &lastOutput, outputCallbackTracker)

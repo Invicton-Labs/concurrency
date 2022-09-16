@@ -30,3 +30,12 @@ type ExecutorFinalInput[InputType any] executorInput[InputType, any, any, Proces
 func ExecutorFinal[InputType any](ctx context.Context, input ExecutorFinalInput[InputType]) *ExecutorOutput[any] {
 	return new(ctx, (executorInput[InputType, any, any, ProcessingFuncWithInputWithoutOutput[InputType]])(input), nil, 0, false)
 }
+
+func SliceToChan[InputType any](inputs []InputType) <-chan InputType {
+	c := make(chan InputType, len(inputs))
+	for _, v := range inputs {
+		c <- v
+	}
+	close(c)
+	return c
+}
