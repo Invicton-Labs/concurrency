@@ -281,7 +281,7 @@ func testExecutorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 	for {
 		done := false
 		select {
-		case <-executor.Ctx.Done():
+		case <-executor.Ctx().Done():
 			done = true
 		case v, open := <-executor.OutputChan:
 			if !open {

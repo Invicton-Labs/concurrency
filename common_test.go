@@ -39,7 +39,7 @@ func testVerifyCleanup[OutputChanType any](t *testing.T, executor *ExecutorOutpu
 		}
 	}
 	select {
-	case _, open := <-executor.Ctx.Done():
+	case _, open := <-executor.Ctx().Done():
 		if open {
 			t.Errorf("Executor context should be done, but is not")
 			return

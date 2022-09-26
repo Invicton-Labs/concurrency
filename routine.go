@@ -19,6 +19,7 @@ type routineExitSettings[
 	executorInput             *executorInput[InputType, OutputType, OutputChanType, ProcessingFuncType]
 	upstreamCtxCancel         *upstreamCtxCancel
 	passthroughCtxCancel      context.CancelFunc
+	errChan                   chan struct{}
 	routineStatusTracker      *RoutineStatusTracker
 	outputChan                chan OutputChanType
 	baseExecutorCallbackInput *BaseExecutorCallbackInput
@@ -196,6 +197,8 @@ func getRoutineExit[
 				// If an error occured at all, here or higher in the chain,
 				// cancel our passthrough context.
 				settings.passthroughCtxCancel()
+				// Close the channel that only gets closed if there's an error.
+				close(settings.errChan)
 			}
 			return err
 		} else {
