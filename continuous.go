@@ -72,6 +72,24 @@ func ContinuousUnbatch[OutputChanType any](
 	return new(ctx, (executorInput[time.Time, []OutputChanType, OutputChanType, ProcessingFuncWithoutInputWithOutput[[]OutputChanType]])(input), saveOutputUnbatch[OutputChanType], 0, forceWaitForInput)
 }
 
+type ContinuousRebatchInput[OutputType any] executorInput[time.Time, []OutputType, []OutputType, ProcessingFuncWithoutInputWithOutput[[]OutputType]]
+
+func ContinuousRebatch[OutputType any](
+	ctx context.Context,
+	input ContinuousRebatchInput[OutputType],
+	period time.Duration,
+) *ExecutorOutput[[]OutputType] {
+	if input.InputChannel != nil {
+		panic("Cannot provide input.InputChannel for ContinuousRebatch")
+	}
+	if input.BatchSize <= 0 {
+		panic("input.BatchSize must be > 0 when using ContinuousRebatch")
+	}
+	forceWaitForInput, inputChannel := getContinuousInputChannel(input.Concurrency, period)
+	input.InputChannel = inputChannel
+	return new(ctx, (executorInput[time.Time, []OutputType, []OutputType, ProcessingFuncWithoutInputWithOutput[[]OutputType]])(input), getSaveOutputRebatchFunc[OutputType](input.BatchSize), input.BatchMaxPeriod, forceWaitForInput)
+}
+
 type ContinuousFinalInput executorInput[time.Time, any, any, ProcessingFuncWithoutInputWithoutOutput]
 
 func ContinuousFinal(

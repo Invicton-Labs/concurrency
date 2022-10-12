@@ -23,6 +23,14 @@ func ChainUnbatch[InputType any, OutputChanType any](upstream *ExecutorOutput[In
 	return new(upstream.Ctx(), (executorInput[InputType, []OutputChanType, OutputChanType, ProcessingFuncWithInputWithOutput[InputType, []OutputChanType]])(input), saveOutputUnbatch[OutputChanType], 0, false)
 }
 
+func ChainRebatch[InputType any, OutputType any](upstream *ExecutorOutput[InputType], input ExecutorRebatchInput[InputType, OutputType]) *ExecutorOutput[[]OutputType] {
+	if input.BatchSize <= 0 {
+		panic("input.BatchSize must be > 0 when using ChainRebatch")
+	}
+	input.upstream = upstream
+	return new(upstream.Ctx(), (executorInput[InputType, []OutputType, []OutputType, ProcessingFuncWithInputWithOutput[InputType, []OutputType]])(input), getSaveOutputRebatchFunc[OutputType](input.BatchSize), 0, false)
+}
+
 func ChainFinal[InputType any](upstream *ExecutorOutput[InputType], input ExecutorFinalInput[InputType]) *ExecutorOutput[any] {
 	input.upstream = upstream
 	return new(upstream.Ctx(), (executorInput[InputType, any, any, ProcessingFuncWithInputWithoutOutput[InputType]])(input), nil, 0, false)

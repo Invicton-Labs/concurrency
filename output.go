@@ -179,3 +179,82 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 		return nil
 	}
 }
+
+func getSaveOutputRebatchFunc[OutputType any](batchSize int) func(
+	settings *saveOutputSettings[[]OutputType],
+	values []OutputType,
+	inputIndex uint64,
+	lastOutput *time.Time,
+	callbackTracker *timeTracker,
+	forceSendBatch bool,
+) (
+	err error,
+) {
+	batch := make([]OutputType, batchSize)
+	var batchIdx int = 0
+	var batchLock sync.Mutex
+
+	return func(
+		settings *saveOutputSettings[[]OutputType],
+		values []OutputType,
+		inputIndex uint64,
+		lastOutput *time.Time,
+		callbackTracker *timeTracker,
+		forceSendBatch bool,
+	) (
+		err error,
+	) {
+		batchLock.Lock()
+		defer batchLock.Unlock()
+
+		// A function for sending the current batch downstream
+		sendBatchFunc := func() error {
+			// Save the output
+			if batchIdx == batchSize {
+				// If it's a complete batch, send the entire slice
+				err = saveOutput(settings, batch, inputIndex, lastOutput, callbackTracker, false)
+			} else {
+				// If it's an incomplete batch, send a subslice since the slice
+				// was pre-allocated and filled with zero-values (which we don't
+				// want to send downstream)
+				err = saveOutput(settings, batch[0:batchIdx], inputIndex, lastOutput, callbackTracker, false)
+			}
+
+			// Clear the batch
+			batch = make([]OutputType, batchSize)
+			batchIdx = 0
+
+			return err
+		}
+
+		if forceSendBatch {
+			// If this is a force send (not a real output), check if there's anything in the batch
+			if batchIdx > 0 {
+				// If so, send it and return
+				return sendBatchFunc()
+			} else {
+				// If it's a force batch send, but we didn't actually
+				// send a batch, reset the output timer anyways
+				settings.batchTimeTracker.Reset()
+				return nil
+			}
+		} else {
+			for _, value := range values {
+				// If we want zero values, or it's not a zero value anyways, save
+				// the output value into the batch and increment the batch index.
+				if !settings.ignoreZeroValueOutputs || !reflect.ValueOf(value).IsZero() {
+					batch[batchIdx] = value
+					batchIdx++
+
+					// Check if we now have a full batch
+					if batchIdx >= batchSize {
+						// If so, send it
+						return sendBatchFunc()
+					}
+				}
+			}
+		}
+
+		return nil
+	}
+}

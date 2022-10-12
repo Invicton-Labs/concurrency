@@ -104,20 +104,23 @@ func (upo *RoutineStatusTracker) updateRoutineStatus(routineIdx uint, newStatus 
 		atomic.AddInt32(&upo.numRoutinesAwaitingOutput, 1)
 	case Errored:
 		atomic.AddInt32(&upo.numRoutinesErrored, 1)
+		remaining := atomic.AddInt32(&upo.numRoutinesRunning, -1)
 		// If it's errored, it's done, so reduce the number of running routines
-		if atomic.AddInt32(&upo.numRoutinesRunning, -1) == 0 {
+		if remaining == 0 {
 			isLastRoutine = true
 		}
 	case ContextDone:
 		atomic.AddInt32(&upo.numRoutinesContextDone, 1)
-		// If it's errored, it's done, so reduce the number of running routines
-		if atomic.AddInt32(&upo.numRoutinesRunning, -1) == 0 {
+		remaining := atomic.AddInt32(&upo.numRoutinesRunning, -1)
+		// If the context is done, it's done, so reduce the number of running routines
+		if remaining == 0 {
 			isLastRoutine = true
 		}
 	case Finished:
 		atomic.AddInt32(&upo.numRoutinesFinished, 1)
+		remaining := atomic.AddInt32(&upo.numRoutinesRunning, -1)
 		// If it's finished, it's done, so reduce the number of running routines
-		if atomic.AddInt32(&upo.numRoutinesRunning, -1) == 0 {
+		if remaining == 0 {
 			isLastRoutine = true
 		}
 	default:

@@ -25,6 +25,15 @@ func ExecutorUnbatch[InputType any, OutputChanType any](ctx context.Context, inp
 	return new(ctx, (executorInput[InputType, []OutputChanType, OutputChanType, ProcessingFuncWithInputWithOutput[InputType, []OutputChanType]])(input), saveOutputUnbatch[OutputChanType], 0, false)
 }
 
+type ExecutorRebatchInput[InputType any, OutputType any] executorInput[InputType, []OutputType, []OutputType, ProcessingFuncWithInputWithOutput[InputType, []OutputType]]
+
+func ExecutorRebatch[InputType any, OutputType any](ctx context.Context, input ExecutorRebatchInput[InputType, OutputType]) *ExecutorOutput[[]OutputType] {
+	if input.BatchSize <= 0 {
+		panic("input.BatchSize must be > 0 when using ExecutorRebatch")
+	}
+	return new(ctx, (executorInput[InputType, []OutputType, []OutputType, ProcessingFuncWithInputWithOutput[InputType, []OutputType]])(input), getSaveOutputRebatchFunc[OutputType](input.BatchSize), 0, false)
+}
+
 type ExecutorFinalInput[InputType any] executorInput[InputType, any, any, ProcessingFuncWithInputWithoutOutput[InputType]]
 
 func ExecutorFinal[InputType any](ctx context.Context, input ExecutorFinalInput[InputType]) *ExecutorOutput[any] {
