@@ -187,6 +187,8 @@ type ExecutorOutput[OutputChanType any] struct {
 	upstreamCtxCancel *upstreamCtxCancel
 }
 
+// Wait waits for an executor to finish. If the executor exited with an error,
+// that error will be returned.
 func (eo *ExecutorOutput[OutputChanType]) Wait() error {
 	err := eo.errorGroup.Wait()
 	// We use a separate context for output/passthrough than we
@@ -197,6 +199,8 @@ func (eo *ExecutorOutput[OutputChanType]) Wait() error {
 	return err
 }
 
+// Ctx returns a context that is derived from the top-level executor's input context and is cancelled
+// if any of the executors in a chain fail (after they are all cleaned up).
 func (eo *ExecutorOutput[OutputChanType]) Ctx() context.Context {
 	return eo.ctx
 }
