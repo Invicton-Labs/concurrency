@@ -11,12 +11,12 @@ type getInputSettings[
 	OutputChanType any,
 	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ] struct {
-	ctxCancelledFunc                  func(inputIdx uint64) error
+	ctxCancelledFunc                  func(executorInputIdx uint64, routineInputIdx uint64) error
 	internalCtx                       context.Context
 	executorInput                     *executorInput[InputType, OutputType, OutputChanType, ProcessingFuncType]
 	emptyInputChannelCallbackInterval time.Duration
 	inputChan                         <-chan InputType
-	getRoutineFunctionMetadata        func(inputIndex uint64) *RoutineFunctionMetadata
+	getRoutineFunctionMetadata        func(executorInputIndex uint64, routineInputIndex uint64) *RoutineFunctionMetadata
 }
 
 func getInput[
@@ -26,7 +26,8 @@ func getInput[
 	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ](
 	settings *getInputSettings[InputType, OutputType, OutputChanType, ProcessingFuncType],
-	inputIndex uint64,
+	executorInputIndex uint64,
+	routineInputIndex uint64,
 	lastInputTime *time.Time,
 	callbackTimer *timeTracker,
 	batchTimer *timeTracker,
@@ -44,7 +45,7 @@ func getInput[
 	// so we always exit on that. We check this first so
 	// that it has the highest priority.
 	if settings.internalCtx.Err() != nil {
-		return input, false, false, settings.ctxCancelledFunc(inputIndex)
+		return input, false, false, settings.ctxCancelledFunc(executorInputIndex, routineInputIndex)
 	} else {
 		// The internal context is not done, so now wait for
 		// the first thing to act on.
@@ -69,7 +70,7 @@ func getInput[
 			// Check if the internal executor context is done
 			case <-settings.internalCtx.Done():
 				// If so, exit
-				return input, false, false, settings.ctxCancelledFunc(inputIndex)
+				return input, false, false, settings.ctxCancelledFunc(executorInputIndex, routineInputIndex)
 
 			// Try to get an input from the input channel
 			case input, inputReceived = <-settings.inputChan:
@@ -90,7 +91,7 @@ func getInput[
 			// it will never return.
 			case <-callbackTimer.TimerChan():
 				if err := settings.executorInput.EmptyInputChannelCallback(&EmptyInputChannelCallbackInput{
-					RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(inputIndex),
+					RoutineFunctionMetadata: settings.getRoutineFunctionMetadata(executorInputIndex, routineInputIndex),
 					TimeSinceLastInput:      time.Since(*lastInputTime),
 				}); err != nil {
 					return input, false, false, err

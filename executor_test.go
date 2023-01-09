@@ -262,7 +262,7 @@ func testExecutorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 		OutputChannelSize: inputCount * 2,
 		InputChannel:      inputChan,
 		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (uint, error) {
-			if metadata.InputIndex > uint64(fullBatches*batchSize) && metadata.InputIndex%1000 == 0 {
+			if metadata.ExecutorInputIndex > uint64(fullBatches*batchSize) && metadata.ExecutorInputIndex%1000 == 0 {
 				select {
 				case <-ctx.Done():
 					return 0, ctx.Err()

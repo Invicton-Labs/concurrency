@@ -29,7 +29,9 @@ type RoutineFunctionMetadata struct {
 	RoutineIndex uint
 	// The index of the input (the input value is the Nth value
 	// from the input channel)
-	InputIndex uint64
+	ExecutorInputIndex uint64
+	// The index of the input for this routine
+	RoutineInputIndex uint64
 	// The status tracker for this executor
 	RoutineStatusTracker *RoutineStatusTracker
 	// The status trackers for all executors in this chain (by map)
@@ -222,7 +224,8 @@ func new[
 	outputFunc func(
 		input *saveOutputSettings[OutputChanType],
 		value OutputType,
-		inputIndex uint64,
+		executorInputIndex uint64,
+		routineInputIndex uint64,
 		lastOutput *time.Time,
 		callbackTracker *timeTracker,
 		forceSendBatch bool,
