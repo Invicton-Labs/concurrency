@@ -29,7 +29,9 @@ type RoutineFunctionMetadata struct {
 	RoutineIndex uint
 	// The index of the input (the input value is the Nth value
 	// from the input channel)
-	InputIndex uint64
+	ExecutorInputIndex uint64
+	// The index of the input for this routine
+	RoutineInputIndex uint64
 	// The status tracker for this executor
 	RoutineStatusTracker *RoutineStatusTracker
 	// The status trackers for all executors in this chain (by map)
@@ -50,13 +52,14 @@ type executorInput[
 	// and for finding it in callback inputs.
 	Name string
 
-	// REQUIRED. The number of routines to run.
+	// OPTIONAL. The number of routines to run. Defaults to 1.
 	Concurrency int
 
 	// REQUIRED. The function that processes an input into an output.
 	Func ProcessingFuncType
 
-	// REQUIRED FOR TOP-LEVEL EXECUTORS (not for chained executors). The channel that has input values.
+	// REQUIRED FOR TOP-LEVEL EXECUTORS (not for chained executors), with the
+	// exception of Continuous. The channel that has input values.
 	InputChannel <-chan InputType
 
 	// OPTIONAL. The size of the output channel that gets created.
@@ -151,7 +154,11 @@ type ExecutorOutput[OutputChanType any] struct {
 	// A context that is derived from the top-level executor's
 	// input context and is cancelled if any of the executors in
 	// a chain fail (after they are all cleaned up).
-	Ctx context.Context
+	ctx context.Context
+
+	// A channel that only gets closed if the executor finishes with
+	// an error.
+	errChan <-chan struct{}
 
 	// The name of the executor
 	Name string
@@ -182,6 +189,8 @@ type ExecutorOutput[OutputChanType any] struct {
 	upstreamCtxCancel *upstreamCtxCancel
 }
 
+// Wait waits for an executor to finish. If the executor exited with an error,
+// that error will be returned.
 func (eo *ExecutorOutput[OutputChanType]) Wait() error {
 	err := eo.errorGroup.Wait()
 	// We use a separate context for output/passthrough than we
@@ -190,6 +199,18 @@ func (eo *ExecutorOutput[OutputChanType]) Wait() error {
 	// also finish the context, so we must manually cancel it.
 	eo.passthroughCtxCancel()
 	return err
+}
+
+// Ctx returns a context that is derived from the top-level executor's input context and is cancelled
+// if any of the executors in a chain fail (after they are all cleaned up).
+func (eo *ExecutorOutput[OutputChanType]) Ctx() context.Context {
+	return eo.ctx
+}
+
+// Errored returns a channel that never has a value, but will always remain open
+// UNLESS this executor finished with an error.
+func (eo *ExecutorOutput[OutputChanType]) Errored() <-chan struct{} {
+	return eo.errChan
 }
 
 func new[
@@ -203,7 +224,8 @@ func new[
 	outputFunc func(
 		input *saveOutputSettings[OutputChanType],
 		value OutputType,
-		inputIndex uint64,
+		executorInputIndex uint64,
+		routineInputIndex uint64,
 		lastOutput *time.Time,
 		callbackTracker *timeTracker,
 		forceSendBatch bool,
@@ -219,9 +241,6 @@ func new[
 	if input.Name == "" {
 		panic("input.Name cannot be an empty string")
 	}
-	if input.Concurrency == 0 {
-		panic("input.Concurrency must be greater than 0")
-	}
 	if input.Func == nil {
 		panic("input.Func cannot be nil")
 	}
@@ -230,6 +249,12 @@ func new[
 	}
 	if outputFunc == nil && input.OutputChannel != nil {
 		panic("input.OutputChannel must be nil if outputFunc is nil")
+	}
+	if input.Concurrency < 0 {
+		panic("input.Concurrency must not be less than 0")
+	}
+	if input.Concurrency == 0 {
+		input.Concurrency = 1
 	}
 
 	// This is a context that is used internally for the routines in this executor. It
@@ -332,9 +357,11 @@ func new[
 	}
 
 	routineExitSettings := &routineExitSettings[InputType, OutputType, OutputChanType, ProcessingFuncType]{
-		executorInput:             &input,
-		upstreamCtxCancel:         upstreamCancellation,
-		passthroughCtxCancel:      passthroughCtxCancel,
+		executorInput:        &input,
+		upstreamCtxCancel:    upstreamCancellation,
+		passthroughCtxCancel: passthroughCtxCancel,
+		// Create a channel that will be closed ONLY if this executor exits with an error.
+		errChan:                   make(chan struct{}),
 		routineStatusTracker:      routineStatusTracker,
 		outputChan:                outputChan,
 		baseExecutorCallbackInput: baseCallbackInput,
@@ -421,7 +448,8 @@ func new[
 	}
 
 	return &ExecutorOutput[OutputChanType]{
-		Ctx:                        passthroughCtx,
+		ctx:                        passthroughCtx,
+		errChan:                    routineExitSettings.errChan,
 		Name:                       input.Name,
 		RoutineStatusTracker:       routineStatusTracker,
 		OutputChan:                 outputChan,

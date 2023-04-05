@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ type routineExitSettings[
 	executorInput             *executorInput[InputType, OutputType, OutputChanType, ProcessingFuncType]
 	upstreamCtxCancel         *upstreamCtxCancel
 	passthroughCtxCancel      context.CancelFunc
+	errChan                   chan struct{}
 	routineStatusTracker      *RoutineStatusTracker
 	outputChan                chan OutputChanType
 	baseExecutorCallbackInput *BaseExecutorCallbackInput
@@ -195,6 +197,8 @@ func getRoutineExit[
 				// If an error occured at all, here or higher in the chain,
 				// cancel our passthrough context.
 				settings.passthroughCtxCancel()
+				// Close the channel that only gets closed if there's an error.
+				close(settings.errChan)
 			}
 			return err
 		} else {
@@ -233,7 +237,8 @@ type routineSettings[
 	outputFunc                              func(
 		settings *saveOutputSettings[OutputChanType],
 		value OutputType,
-		inputIndex uint64,
+		executorInputIndex uint64,
+		routineInputIndex uint64,
 		lastOutput *time.Time,
 		callbackTracker *timeTracker,
 		forceSendBatch bool,
@@ -264,17 +269,18 @@ func getRoutine[
 	// This function gets the routine function metadata. We use an existing struct
 	// so we don't need to spend the time/memory creating a new one for each function
 	// call. We just update the input index as necessary and use the existing one.
-	getRoutineFunctionMetadata := func(inputIdx uint64) *RoutineFunctionMetadata {
-		routineFunctionMetadata.InputIndex = inputIdx
+	getRoutineFunctionMetadata := func(executorInputIdx uint64, routineInputIdx uint64) *RoutineFunctionMetadata {
+		routineFunctionMetadata.ExecutorInputIndex = executorInputIdx
+		routineFunctionMetadata.RoutineInputIndex = routineInputIdx
 		return routineFunctionMetadata
 	}
 
 	// The function to call if the context has been cancelled
-	ctxCancelledFunc := func(inputIdx uint64) error {
+	ctxCancelledFunc := func(executorInputIdx uint64, routineInputIdx uint64) error {
 		// If we have a callback for this, call it and return the value
 		if settings.executorInput.RoutineContextDoneCallback != nil {
 			return settings.executorInput.RoutineContextDoneCallback(&RoutineContextDoneCallbackInput{
-				RoutineFunctionMetadata: getRoutineFunctionMetadata(inputIdx),
+				RoutineFunctionMetadata: getRoutineFunctionMetadata(executorInputIdx, routineInputIdx),
 				Err:                     settings.internalCtx.Err(),
 			})
 		}
@@ -303,11 +309,13 @@ func getRoutine[
 		batchTimeTracker:                  settings.batchTimeTracker,
 	}
 
+	var routineInputIndex uint64 = 0
+
 	var cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) error
 	if settings.isBatchOutput {
 		cleanupFunc = func(lastOutput *time.Time, callbackTracker *timeTracker) error {
 			var output OutputType
-			return settings.outputFunc(saveOutputSettings, output, atomic.LoadUint64(settings.inputIndexCounter), lastOutput, callbackTracker, true)
+			return settings.outputFunc(saveOutputSettings, output, atomic.LoadUint64(settings.inputIndexCounter), routineInputIndex, lastOutput, callbackTracker, true)
 		}
 	}
 
@@ -331,9 +339,9 @@ func getRoutine[
 			// Convert panics into errors
 			if r := recover(); r != nil {
 				if perr, ok := r.(error); ok {
-					err = perr
+					err = fmt.Errorf("%s: %s", perr.Error(), string(debug.Stack()))
 				} else {
-					err = fmt.Errorf("%v", r)
+					err = fmt.Errorf("%v: %s", r, string(debug.Stack()))
 				}
 			}
 			err = settings.exitFunc(err, routineIdx, cleanupFunc, &lastOutput, outputCallbackTracker)
@@ -347,19 +355,20 @@ func getRoutine[
 		var output OutputType
 		var input InputType
 		var forceSendBatch bool
-		var inputIndex uint64
+		var executorInputIndex uint64
 
 		for {
 			// Find the index of this input retrieval
-			inputIndex = atomic.AddUint64(settings.inputIndexCounter, 1) - 1
+			executorInputIndex = atomic.AddUint64(settings.inputIndexCounter, 1) - 1
 
 			// Load the metadata
-			metadata = getRoutineFunctionMetadata(inputIndex)
+			metadata = getRoutineFunctionMetadata(executorInputIndex, routineInputIndex)
+			routineInputIndex++
 
 			if shouldGetInput {
 				// Get the input from the input channel
 				var inputChanClosed bool
-				input, inputChanClosed, forceSendBatch, err = getInput(getInputSettings, inputIndex, &lastInput, inputCallbackTracker, settings.batchTimeTracker)
+				input, inputChanClosed, forceSendBatch, err = getInput(getInputSettings, executorInputIndex, routineInputIndex, &lastInput, inputCallbackTracker, settings.batchTimeTracker)
 				// If there was an error, or the input channel is closed, exit
 				if err != nil {
 					return err
@@ -410,13 +419,13 @@ func getRoutine[
 					// that error instead of the processing error, since we don't really care
 					// about the processing error if the context was cancelled anyways.
 					if settings.internalCtx.Err() != nil {
-						return ctxCancelledFunc(inputIndex)
+						return ctxCancelledFunc(executorInputIndex, routineInputIndex)
 					}
 
 					// If there's a callback for the function throwing an error, call it
 					if settings.executorInput.RoutineErrorCallback != nil {
 						return settings.executorInput.RoutineErrorCallback(&RoutineErrorCallbackInput{
-							RoutineFunctionMetadata: getRoutineFunctionMetadata(inputIndex),
+							RoutineFunctionMetadata: getRoutineFunctionMetadata(executorInputIndex, routineInputIndex),
 							Err:                     err,
 						})
 					}
@@ -431,7 +440,7 @@ func getRoutine[
 				// only output the existing batch and will not actually add a value to the batch.
 				// Otherwise, it sends the output either into the batch or directly into the
 				// output channel, depending on whether batching is being used.
-				err := settings.outputFunc(saveOutputSettings, output, inputIndex, &lastOutput, outputCallbackTracker, forceSendBatch)
+				err := settings.outputFunc(saveOutputSettings, output, executorInputIndex, routineInputIndex, &lastOutput, outputCallbackTracker, forceSendBatch)
 				if err != nil {
 					return err
 				}
