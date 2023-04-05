@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/Invicton-Labs/go-stackerr"
 )
 
 func init() {
@@ -11,12 +13,12 @@ func init() {
 	DefaultFullOutputChannelCallbackInterval = 1 * time.Second
 }
 
-func testEmptyInputCallback(input *EmptyInputChannelCallbackInput) error {
+func testEmptyInputCallback(input *EmptyInputChannelCallbackInput) stackerr.Error {
 	fmt.Printf("%s routine %d has received no input after %dms\n", input.ExecutorName, input.RoutineIndex, input.TimeSinceLastInput.Milliseconds())
 	return nil
 }
 
-func testFullOutputCallback(input *FullOutputChannelCallbackInput) error {
+func testFullOutputCallback(input *FullOutputChannelCallbackInput) stackerr.Error {
 	fmt.Printf("%s routine %d has not been able to output for %dms\n", input.ExecutorName, input.RoutineIndex, input.TimeSinceLastOutput.Milliseconds())
 	return nil
 }

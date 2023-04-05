@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/Invicton-Labs/go-stackerr"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -13,10 +14,10 @@ var (
 	DefaultFullOutputChannelCallbackInterval time.Duration = 1 * time.Second
 )
 
-type ProcessingFuncWithInputWithOutput[InputType any, OutputType any] func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output OutputType, err error)
-type ProcessingFuncWithInputWithoutOutput[InputType any] func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (err error)
-type ProcessingFuncWithoutInputWithOutput[OutputType any] func(ctx context.Context, metadata *RoutineFunctionMetadata) (output OutputType, err error)
-type ProcessingFuncWithoutInputWithoutOutput func(ctx context.Context, metadata *RoutineFunctionMetadata) (err error)
+type ProcessingFuncWithInputWithOutput[InputType any, OutputType any] func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (output OutputType, err stackerr.Error)
+type ProcessingFuncWithInputWithoutOutput[InputType any] func(ctx context.Context, input InputType, metadata *RoutineFunctionMetadata) (err stackerr.Error)
+type ProcessingFuncWithoutInputWithOutput[OutputType any] func(ctx context.Context, metadata *RoutineFunctionMetadata) (output OutputType, err stackerr.Error)
+type ProcessingFuncWithoutInputWithoutOutput func(ctx context.Context, metadata *RoutineFunctionMetadata) (err stackerr.Error)
 type ProcessingFuncTypes[InputType any, OutputType any] interface {
 	ProcessingFuncWithInputWithOutput[InputType, OutputType] | ProcessingFuncWithInputWithoutOutput[InputType] | ProcessingFuncWithoutInputWithOutput[OutputType] | ProcessingFuncWithoutInputWithoutOutput
 }
@@ -89,7 +90,7 @@ type executorInput[
 	// OPTIONAL. A function to call when the input channel is empty, but not closed.
 	// Each routine has its own separate timer, so this could be called many times
 	// concurrently by different routines.
-	EmptyInputChannelCallback func(input *EmptyInputChannelCallbackInput) error
+	EmptyInputChannelCallback func(input *EmptyInputChannelCallbackInput) stackerr.Error
 
 	// OPTIONAL. How long to wait to write an output before calling the full outputcallback
 	// function, IF one has been provided.  Defaults to the
@@ -99,29 +100,29 @@ type executorInput[
 	// be written to it. Each routine has its own separate timer, so this could be called many
 	// times concurrently by different routines.
 	// Only applies if the these options are for a non-final executor.
-	FullOutputChannelCallback func(input *FullOutputChannelCallbackInput) error
+	FullOutputChannelCallback func(input *FullOutputChannelCallbackInput) stackerr.Error
 
 	// OPTIONAL. A function to call when the routine is about to exit due to an error.
 	// Note that this is PER ROUTINE, not when the executor (group of routines) is about to exit.
-	RoutineErrorCallback func(input *RoutineErrorCallbackInput) error
+	RoutineErrorCallback func(input *RoutineErrorCallbackInput) stackerr.Error
 	// OPTIONAL. A function to call when the routine is about to exit due to the
 	// input channel being closed. Note that this is PER ROUTINE,
 	// not when the executor (group of routines) is about to exit.
-	RoutineSuccessCallback func(input *RoutineSuccessCallbackInput) error
+	RoutineSuccessCallback func(input *RoutineSuccessCallbackInput) stackerr.Error
 	// OPTIONAL. A function to call when a routine is about to exit due to the context
 	// being done. Note that this is PER ROUTINE, not when the executor (group of routines)
 	// is about to exit.
-	RoutineContextDoneCallback func(input *RoutineContextDoneCallbackInput) error
+	RoutineContextDoneCallback func(input *RoutineContextDoneCallbackInput) stackerr.Error
 
 	// OPTIONAL. A function to call ONCE when all routines in the executor are finished
 	// and there was an error in one or more routines.
-	ExecutorErrorCallback func(input *ExecutorErrorCallbackInput) error
+	ExecutorErrorCallback func(input *ExecutorErrorCallbackInput) stackerr.Error
 	// OPTIONAL. A function to call ONCE when all routines in the executor are finished
 	// and there were no errors.
-	ExecutorSuccessCallback func(input *ExecutorSuccessCallbackInput) error
+	ExecutorSuccessCallback func(input *ExecutorSuccessCallbackInput) stackerr.Error
 	// OPTIONAL. A function to call ONCE when all routines in the executor are finished
 	// and the context was cancelled.
-	ExecutorContextDoneCallback func(input *ExecutorContextDoneCallbackInput) error
+	ExecutorContextDoneCallback func(input *ExecutorContextDoneCallbackInput) stackerr.Error
 
 	// OPTIONAL. The number of elements in each batch. Only used for executors that batch outputs.
 	BatchSize int
@@ -191,8 +192,8 @@ type ExecutorOutput[OutputChanType any] struct {
 
 // Wait waits for an executor to finish. If the executor exited with an error,
 // that error will be returned.
-func (eo *ExecutorOutput[OutputChanType]) Wait() error {
-	err := eo.errorGroup.Wait()
+func (eo *ExecutorOutput[OutputChanType]) Wait() stackerr.Error {
+	err := stackerr.Wrap(eo.errorGroup.Wait())
 	// We use a separate context for output/passthrough than we
 	// do for the error group, in order to handle cleanup related
 	// tasks. However, it is expected that calling "Wait()" will
@@ -230,7 +231,7 @@ func new[
 		callbackTracker *timeTracker,
 		forceSendBatch bool,
 	) (
-		err error,
+		err stackerr.Error,
 	),
 	batchMaxInterval time.Duration,
 	forceWaitForInput bool,

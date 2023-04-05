@@ -3,11 +3,12 @@ package concurrency
 import (
 	"context"
 	"errors"
-	"fmt"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Invicton-Labs/go-stackerr"
 )
 
 type routineExitSettings[
@@ -32,10 +33,10 @@ func getRoutineExit[
 	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ](
 	settings *routineExitSettings[InputType, OutputType, OutputChanType, ProcessingFuncType],
-) func(err error, routineIdx uint, cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) error, lastOutput *time.Time, callbackTracker *timeTracker) error {
+) func(err stackerr.Error, routineIdx uint, cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) stackerr.Error, lastOutput *time.Time, callbackTracker *timeTracker) stackerr.Error {
 	var errLock sync.Mutex
-	var exitErr error
-	return func(err error, routineIdx uint, cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) error, lastOutput *time.Time, callbackTracker *timeTracker) error {
+	var exitErr stackerr.Error
+	return func(err stackerr.Error, routineIdx uint, cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) stackerr.Error, lastOutput *time.Time, callbackTracker *timeTracker) stackerr.Error {
 
 		isLastRoutine := false
 
@@ -243,9 +244,9 @@ type routineSettings[
 		callbackTracker *timeTracker,
 		forceSendBatch bool,
 	) (
-		err error,
+		err stackerr.Error,
 	)
-	exitFunc func(err error, routineIdx uint, cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) error, lastOutput *time.Time, callbackTracker *timeTracker) error
+	exitFunc func(err stackerr.Error, routineIdx uint, cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) stackerr.Error, lastOutput *time.Time, callbackTracker *timeTracker) stackerr.Error
 }
 
 func getRoutine[
@@ -276,16 +277,16 @@ func getRoutine[
 	}
 
 	// The function to call if the context has been cancelled
-	ctxCancelledFunc := func(executorInputIdx uint64, routineInputIdx uint64) error {
+	ctxCancelledFunc := func(executorInputIdx uint64, routineInputIdx uint64) stackerr.Error {
 		// If we have a callback for this, call it and return the value
 		if settings.executorInput.RoutineContextDoneCallback != nil {
 			return settings.executorInput.RoutineContextDoneCallback(&RoutineContextDoneCallbackInput{
 				RoutineFunctionMetadata: getRoutineFunctionMetadata(executorInputIdx, routineInputIdx),
-				Err:                     settings.internalCtx.Err(),
+				Err:                     stackerr.Wrap(settings.internalCtx.Err()),
 			})
 		}
 		// Return the error that caused the context to cancel
-		return settings.internalCtx.Err()
+		return stackerr.Wrap(settings.internalCtx.Err())
 	}
 
 	getInputSettings := &getInputSettings[InputType, OutputType, OutputChanType, ProcessingFuncType]{
@@ -311,9 +312,9 @@ func getRoutine[
 
 	var routineInputIndex uint64 = 0
 
-	var cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) error
+	var cleanupFunc func(lastOutput *time.Time, callbackTracker *timeTracker) stackerr.Error
 	if settings.isBatchOutput {
-		cleanupFunc = func(lastOutput *time.Time, callbackTracker *timeTracker) error {
+		cleanupFunc = func(lastOutput *time.Time, callbackTracker *timeTracker) stackerr.Error {
 			var output OutputType
 			return settings.outputFunc(saveOutputSettings, output, atomic.LoadUint64(settings.inputIndexCounter), routineInputIndex, lastOutput, callbackTracker, true)
 		}
@@ -338,13 +339,13 @@ func getRoutine[
 		defer func() {
 			// Convert panics into errors
 			if r := recover(); r != nil {
-				if perr, ok := r.(error); ok {
-					err = fmt.Errorf("%s: %s", perr.Error(), string(debug.Stack()))
+				if perr, ok := r.(stackerr.Error); ok {
+					err = stackerr.Errorf("%s: %s", perr.Error(), string(debug.Stack()))
 				} else {
-					err = fmt.Errorf("%v: %s", r, string(debug.Stack()))
+					err = stackerr.Errorf("%v: %s", r, string(debug.Stack()))
 				}
 			}
-			err = settings.exitFunc(err, routineIdx, cleanupFunc, &lastOutput, outputCallbackTracker)
+			err = settings.exitFunc(stackerr.Wrap(err), routineIdx, cleanupFunc, &lastOutput, outputCallbackTracker)
 		}()
 
 		var metadata *RoutineFunctionMetadata
@@ -387,7 +388,7 @@ func getRoutine[
 				// Since we didn't use the getInput function, we haven't checked for
 				// the context being done or whether we should force-send a batch.
 				// So, check that now.
-				if err := settings.internalCtx.Err(); err != nil {
+				if err := stackerr.Wrap(settings.internalCtx.Err()); err != nil {
 					return err
 				}
 
@@ -426,7 +427,7 @@ func getRoutine[
 					if settings.executorInput.RoutineErrorCallback != nil {
 						return settings.executorInput.RoutineErrorCallback(&RoutineErrorCallbackInput{
 							RoutineFunctionMetadata: getRoutineFunctionMetadata(executorInputIndex, routineInputIndex),
-							Err:                     err,
+							Err:                     stackerr.Wrap(err),
 						})
 					}
 					// Otherwise, just return the error

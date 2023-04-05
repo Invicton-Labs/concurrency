@@ -6,15 +6,17 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Invicton-Labs/go-stackerr"
 )
 
 type saveOutputSettings[
 	OutputChanType any,
 ] struct {
-	ctxCancelledFunc                  func(executorInputIdx uint64, routineInputIndex uint64) error
+	ctxCancelledFunc                  func(executorInputIdx uint64, routineInputIndex uint64) stackerr.Error
 	internalCtx                       context.Context
 	fullOutputChannelCallbackInterval time.Duration
-	fullOutputChannelCallback         func(input *FullOutputChannelCallbackInput) error
+	fullOutputChannelCallback         func(input *FullOutputChannelCallbackInput) stackerr.Error
 	ignoreZeroValueOutputs            bool
 	outputChan                        chan<- OutputChanType
 	outputIndexCounter                *uint64
@@ -31,7 +33,7 @@ func saveOutput[OutputChanType any](
 	callbackTracker *timeTracker,
 	forceSendBatch bool,
 ) (
-	err error,
+	err stackerr.Error,
 ) {
 	if forceSendBatch {
 		panic("Unexpected use of forceSendBatch")
@@ -102,7 +104,7 @@ func saveOutputUnbatch[OutputType any](
 	callbackTracker *timeTracker,
 	forceSendBatch bool,
 ) (
-	err error,
+	err stackerr.Error,
 ) {
 	if forceSendBatch {
 		panic("Unexpected use of forceSendBatch")
@@ -129,7 +131,7 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 	callbackTracker *timeTracker,
 	forceSendBatch bool,
 ) (
-	err error,
+	err stackerr.Error,
 ) {
 	batch := make([]OutputType, batchSize)
 	var batchIdx int = 0
@@ -144,7 +146,7 @@ func getSaveOutputBatchFunc[OutputType any](batchSize int) func(
 		callbackTracker *timeTracker,
 		forceSendBatch bool,
 	) (
-		err error,
+		err stackerr.Error,
 	) {
 		batchLock.Lock()
 		defer batchLock.Unlock()
@@ -193,7 +195,7 @@ func getSaveOutputRebatchFunc[OutputType any](batchSize int) func(
 	callbackTracker *timeTracker,
 	forceSendBatch bool,
 ) (
-	err error,
+	err stackerr.Error,
 ) {
 	batch := make([]OutputType, batchSize)
 	var batchIdx int = 0
@@ -208,13 +210,13 @@ func getSaveOutputRebatchFunc[OutputType any](batchSize int) func(
 		callbackTracker *timeTracker,
 		forceSendBatch bool,
 	) (
-		err error,
+		err stackerr.Error,
 	) {
 		batchLock.Lock()
 		defer batchLock.Unlock()
 
 		// A function for sending the current batch downstream
-		sendBatchFunc := func() error {
+		sendBatchFunc := func() stackerr.Error {
 			// Save the output
 			if batchIdx == batchSize {
 				// If it's a complete batch, send the entire slice

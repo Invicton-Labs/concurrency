@@ -3,6 +3,8 @@ package concurrency
 import (
 	"context"
 	"fmt"
+
+	"github.com/Invicton-Labs/go-stackerr"
 )
 
 func Chain[InputType any, OutputType any](upstream *ExecutorOutput[InputType], input ExecutorInput[InputType, OutputType]) *ExecutorOutput[OutputType] {
@@ -36,13 +38,13 @@ func ChainFinal[InputType any](upstream *ExecutorOutput[InputType], input Execut
 	return new(upstream.Ctx(), (executorInput[InputType, any, any, ProcessingFuncWithInputWithoutOutput[InputType]])(input), nil, 0, false)
 }
 
-func (eo *ExecutorOutput[OutputType]) IntoSlice() ([]OutputType, error) {
+func (eo *ExecutorOutput[OutputType]) IntoSlice() ([]OutputType, stackerr.Error) {
 	results := []OutputType{}
 	executor := new(eo.Ctx(), executorInput[OutputType, any, any, ProcessingFuncWithInputWithoutOutput[OutputType]]{
 		Name:        fmt.Sprintf("%s-into-slice", eo.Name),
 		Concurrency: 1,
 		upstream:    eo,
-		Func: (ProcessingFuncWithInputWithoutOutput[OutputType])(func(_ context.Context, input OutputType, _ *RoutineFunctionMetadata) error {
+		Func: (ProcessingFuncWithInputWithoutOutput[OutputType])(func(_ context.Context, input OutputType, _ *RoutineFunctionMetadata) stackerr.Error {
 			results = append(results, input)
 			return nil
 		}),

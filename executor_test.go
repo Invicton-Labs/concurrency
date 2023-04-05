@@ -3,12 +3,12 @@ package concurrency
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Invicton-Labs/go-stackerr"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -16,7 +16,7 @@ func TestExecutorPerformance(t *testing.T) {
 	inputCount := 10000000
 	numRoutines := 1
 
-	processingFunc := func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err error) {
+	processingFunc := func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err stackerr.Error) {
 		//time.Sleep(1 * time.Millisecond)
 		return uint(input), nil
 	}
@@ -101,7 +101,7 @@ func testExecutor(t *testing.T, numRoutines int, inputCount int) {
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount * 2,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err stackerr.Error) {
 			atomic.AddInt32(&received, 1)
 			return uint(input), nil
 		},
@@ -157,7 +157,7 @@ func testExecutorUnbatch(t *testing.T, numRoutines int, inputCount int) {
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount * 2,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output []uint, err error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output []uint, err stackerr.Error) {
 			atomic.AddInt32(&received, 1)
 			return []uint{uint(input), uint(input)}, nil
 		},
@@ -208,7 +208,7 @@ func testExecutorBatchNoTimeout(t *testing.T, numRoutines int, inputCount int) {
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount * 2,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (uint, error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (uint, stackerr.Error) {
 			return uint(input), nil
 		},
 		BatchSize:                 batchSize,
@@ -261,11 +261,11 @@ func testExecutorBatchTimeout(t *testing.T, numRoutines int, inputCount int) {
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount * 2,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (uint, error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (uint, stackerr.Error) {
 			if metadata.ExecutorInputIndex > uint64(fullBatches*batchSize) && metadata.ExecutorInputIndex%1000 == 0 {
 				select {
 				case <-ctx.Done():
-					return 0, ctx.Err()
+					return 0, stackerr.Wrap(ctx.Err())
 				case <-time.After(100 * time.Millisecond):
 				}
 			}
@@ -326,7 +326,7 @@ func testExecutorFinal(t *testing.T, numRoutines int, inputCount int) {
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount * 2,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (err error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (err stackerr.Error) {
 			atomic.AddInt32(&received, 1)
 			return nil
 		},
@@ -358,9 +358,9 @@ func testExecutorError(t *testing.T, numRoutines int, inputCount int) {
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount * 2,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err stackerr.Error) {
 			if input > inputCount/2 {
-				return 0, fmt.Errorf("test-error")
+				return 0, stackerr.Errorf("test-error")
 			}
 			return uint(input), nil
 		},

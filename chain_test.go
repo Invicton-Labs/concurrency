@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"testing"
+
+	"github.com/Invicton-Labs/go-stackerr"
 )
 
 func TestExecutorChain(t *testing.T) {
@@ -25,7 +27,7 @@ func testExecutorChain(t *testing.T, numRoutines int, inputCount int) {
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err stackerr.Error) {
 			return uint(input), nil
 		},
 		EmptyInputChannelCallback: testEmptyInputCallback,
@@ -35,7 +37,7 @@ func testExecutorChain(t *testing.T, numRoutines int, inputCount int) {
 		Name:              "test-executor-chain-2",
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount,
-		Func: func(ctx context.Context, input uint, metadata *RoutineFunctionMetadata) (output string, err error) {
+		Func: func(ctx context.Context, input uint, metadata *RoutineFunctionMetadata) (output string, err stackerr.Error) {
 			return fmt.Sprintf("%d", input), nil
 		},
 		EmptyInputChannelCallback: testEmptyInputCallback,
@@ -45,11 +47,11 @@ func testExecutorChain(t *testing.T, numRoutines int, inputCount int) {
 		Name:              "test-executor-chain-3",
 		Concurrency:       1,
 		OutputChannelSize: inputCount,
-		Func: func(ctx context.Context, input string, metadata *RoutineFunctionMetadata) (err error) {
+		Func: func(ctx context.Context, input string, metadata *RoutineFunctionMetadata) (err stackerr.Error) {
 			processed++
-			intval, err := strconv.Atoi(input)
-			if err != nil {
-				return err
+			intval, cerr := strconv.Atoi(input)
+			if cerr != nil {
+				return stackerr.Wrap(cerr)
 			}
 			if intval > highestValueProcessed {
 				highestValueProcessed = intval
@@ -90,7 +92,7 @@ func testExecutorChainBatchUnbatch(t *testing.T, numRoutines int, inputCount int
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err stackerr.Error) {
 			return uint(input), nil
 		},
 		EmptyInputChannelCallback: testEmptyInputCallback,
@@ -105,7 +107,7 @@ func testExecutorChainBatchUnbatch(t *testing.T, numRoutines int, inputCount int
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount,
 		BatchSize:         batchSize,
-		Func: func(ctx context.Context, input uint, metadata *RoutineFunctionMetadata) (output string, err error) {
+		Func: func(ctx context.Context, input uint, metadata *RoutineFunctionMetadata) (output string, err stackerr.Error) {
 			return fmt.Sprintf("%d", input), nil
 		},
 		EmptyInputChannelCallback: testEmptyInputCallback,
@@ -115,12 +117,12 @@ func testExecutorChainBatchUnbatch(t *testing.T, numRoutines int, inputCount int
 		Name:              "test-executor-chain-batch-unbatch-3",
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount,
-		Func: func(ctx context.Context, input []string, metadata *RoutineFunctionMetadata) (output []int64, err error) {
+		Func: func(ctx context.Context, input []string, metadata *RoutineFunctionMetadata) (output []int64, err stackerr.Error) {
 			r := make([]int64, len(input))
 			for i, v := range input {
-				conv, err := strconv.ParseInt(v, 10, 64)
-				if err != nil {
-					return nil, err
+				conv, cerr := strconv.ParseInt(v, 10, 64)
+				if cerr != nil {
+					return nil, stackerr.Wrap(cerr)
 				}
 				r[i] = conv
 			}
@@ -135,7 +137,7 @@ func testExecutorChainBatchUnbatch(t *testing.T, numRoutines int, inputCount int
 		Name:              "test-executor-chain-batch-4",
 		Concurrency:       1,
 		OutputChannelSize: inputCount,
-		Func: func(ctx context.Context, input int64, metadata *RoutineFunctionMetadata) (err error) {
+		Func: func(ctx context.Context, input int64, metadata *RoutineFunctionMetadata) (err stackerr.Error) {
 			processed++
 			if input > highestValueProcessed {
 				highestValueProcessed = input
@@ -177,7 +179,7 @@ func testExecutorIntoSlice(t *testing.T, numRoutines int, inputCount int) {
 		Concurrency:       numRoutines,
 		OutputChannelSize: inputCount,
 		InputChannel:      inputChan,
-		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err error) {
+		Func: func(ctx context.Context, input int, metadata *RoutineFunctionMetadata) (output uint, err stackerr.Error) {
 			return uint(input), nil
 		},
 		EmptyInputChannelCallback: testEmptyInputCallback,

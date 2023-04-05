@@ -1,6 +1,10 @@
 package concurrency
 
-import "time"
+import (
+	"time"
+
+	"github.com/Invicton-Labs/go-stackerr"
+)
 
 // The common set of values for callbacks that are not specific to a single routine
 type BaseExecutorCallbackInput struct {
@@ -11,7 +15,7 @@ type BaseExecutorCallbackInput struct {
 type RoutineErrorCallbackInput struct {
 	*RoutineFunctionMetadata
 	// The error that was returned by the function
-	Err error
+	Err stackerr.Error
 }
 
 type RoutineSuccessCallbackInput struct {
@@ -21,13 +25,13 @@ type RoutineSuccessCallbackInput struct {
 type RoutineContextDoneCallbackInput struct {
 	*RoutineFunctionMetadata
 	// The error that killed the context
-	Err error
+	Err stackerr.Error
 }
 
 type ExecutorErrorCallbackInput struct {
 	*BaseExecutorCallbackInput
 	// The error that caused one or more of the routines to fail
-	Err error
+	Err stackerr.Error
 }
 
 type ExecutorSuccessCallbackInput struct {
@@ -37,7 +41,7 @@ type ExecutorSuccessCallbackInput struct {
 type ExecutorContextDoneCallbackInput struct {
 	*BaseExecutorCallbackInput
 	// The context cancellation error (may wrap other info)
-	Err error
+	Err stackerr.Error
 }
 
 type EmptyInputChannelCallbackInput struct {

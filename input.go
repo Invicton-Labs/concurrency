@@ -3,6 +3,8 @@ package concurrency
 import (
 	"context"
 	"time"
+
+	"github.com/Invicton-Labs/go-stackerr"
 )
 
 type getInputSettings[
@@ -11,7 +13,7 @@ type getInputSettings[
 	OutputChanType any,
 	ProcessingFuncType ProcessingFuncTypes[InputType, OutputType],
 ] struct {
-	ctxCancelledFunc                  func(executorInputIdx uint64, routineInputIdx uint64) error
+	ctxCancelledFunc                  func(executorInputIdx uint64, routineInputIdx uint64) stackerr.Error
 	internalCtx                       context.Context
 	executorInput                     *executorInput[InputType, OutputType, OutputChanType, ProcessingFuncType]
 	emptyInputChannelCallbackInterval time.Duration
@@ -35,7 +37,7 @@ func getInput[
 	input InputType,
 	channelClosed bool,
 	forceSendBatch bool,
-	err error,
+	err stackerr.Error,
 ) {
 
 	inputReceived := false

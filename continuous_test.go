@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Invicton-Labs/go-stackerr"
 )
 
 func TestContinuous(t *testing.T) {
@@ -23,7 +25,7 @@ func testContinuous(t *testing.T, numRoutines int) {
 			Concurrency:            numRoutines,
 			OutputChannelSize:      int(numOutputs),
 			IgnoreZeroValueOutputs: true,
-			Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) (int32, error) {
+			Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) (int32, stackerr.Error) {
 				newval := atomic.AddInt32(&generated, 1)
 				if newval > numOutputs {
 					<-ctx.Done()
@@ -38,7 +40,7 @@ func testContinuous(t *testing.T, numRoutines int) {
 		executor2 := ChainFinal(executor1, ExecutorFinalInput[int32]{
 			Name:        "test-continuous-no-interval-2",
 			Concurrency: 1,
-			Func: func(ctx context.Context, input int32, metadata *RoutineFunctionMetadata) error {
+			Func: func(ctx context.Context, input int32, metadata *RoutineFunctionMetadata) stackerr.Error {
 				received++
 				if input > highestValue {
 					highestValue = input
@@ -76,7 +78,7 @@ func testContinuous(t *testing.T, numRoutines int) {
 			Concurrency:            numRoutines,
 			OutputChannelSize:      int(numOutputs),
 			IgnoreZeroValueOutputs: true,
-			Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) (int32, error) {
+			Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) (int32, stackerr.Error) {
 				newval := atomic.AddInt32(&generated, 1)
 				if newval > numOutputs {
 					<-ctx.Done()
@@ -91,7 +93,7 @@ func testContinuous(t *testing.T, numRoutines int) {
 		executor2 := ChainFinal(executor1, ExecutorFinalInput[int32]{
 			Name:        "test-continuous-interval-2",
 			Concurrency: 1,
-			Func: func(ctx context.Context, input int32, metadata *RoutineFunctionMetadata) error {
+			Func: func(ctx context.Context, input int32, metadata *RoutineFunctionMetadata) stackerr.Error {
 				received++
 				if input > highestValue {
 					highestValue = input
@@ -136,7 +138,7 @@ func testContinuousBatch(t *testing.T, numRoutines int) {
 		BatchMaxPeriod:         100 * time.Millisecond,
 		OutputChannelSize:      batchCount,
 		IgnoreZeroValueOutputs: true,
-		Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) (int32, error) {
+		Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) (int32, stackerr.Error) {
 			newval := atomic.AddInt32(&generated, 1)
 			if newval > numOutputs {
 				time.Sleep(10 * time.Millisecond)
@@ -151,7 +153,7 @@ func testContinuousBatch(t *testing.T, numRoutines int) {
 	executor2 := ChainFinal(executor1, ExecutorFinalInput[[]int32]{
 		Name:        "test-continuous-batch-2",
 		Concurrency: 1,
-		Func: func(ctx context.Context, input []int32, metadata *RoutineFunctionMetadata) error {
+		Func: func(ctx context.Context, input []int32, metadata *RoutineFunctionMetadata) stackerr.Error {
 			for _, v := range input {
 				received++
 				if v > highestValue {
@@ -194,7 +196,7 @@ func testContinuousUnbatch(t *testing.T, numRoutines int) {
 		BatchMaxPeriod:         100 * time.Millisecond,
 		OutputChannelSize:      int(numOutputs),
 		IgnoreZeroValueOutputs: true,
-		Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) ([]int32, error) {
+		Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) ([]int32, stackerr.Error) {
 			newval := atomic.AddInt32(&generated, 1)
 			if newval > numOutputs {
 				time.Sleep(10 * time.Millisecond)
@@ -209,7 +211,7 @@ func testContinuousUnbatch(t *testing.T, numRoutines int) {
 	executor2 := ChainFinal(executor1, ExecutorFinalInput[int32]{
 		Name:        "test-continuous-unbatch-2",
 		Concurrency: 1,
-		Func: func(ctx context.Context, input int32, metadata *RoutineFunctionMetadata) error {
+		Func: func(ctx context.Context, input int32, metadata *RoutineFunctionMetadata) stackerr.Error {
 			received++
 			if input > highestValue {
 				highestValue = input
@@ -250,7 +252,7 @@ func testContinuousFinal(t *testing.T, numRoutines int) {
 		BatchMaxPeriod:         100 * time.Millisecond,
 		OutputChannelSize:      int(numOutputs),
 		IgnoreZeroValueOutputs: true,
-		Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) error {
+		Func: func(ctx context.Context, metadata *RoutineFunctionMetadata) stackerr.Error {
 			newval := atomic.AddInt32(&generated, 1)
 			if newval > numOutputs {
 				ctxCancel()
