@@ -1,4 +1,4 @@
-module github.com/invicton-labs/go-concurrency
+module github.com/Invicton-Labs/go-concurrency
 
 go 1.18
 
